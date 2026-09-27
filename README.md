@@ -2,7 +2,7 @@
 
 Wyvern is a local-first, AI-native orchestration and control system. It is not a chatbot, a single agent, or a single model wrapper. The project is intended to become a persistent runtime layer that coordinates specialized agent runtimes, tools, external reasoning models, local applications, browsers, terminals, IDEs, filesystems, security tools, and eventually deeper operating-system capabilities.
 
-This repository includes the Stage 1 runtime kernel, Stage 1A hardening, and the Stage 2 context and event infrastructure. Runtimes have durable branch-local context, explicit context compilation and propagation boundaries, versioned snapshots, and machine-readable event envelopes. No model or intelligent relevance layer is involved.
+This repository includes the Stage 1 runtime kernel and hardening, Stage 2 context and event infrastructure, Stage 3 scoped memory, Stage 4 capability boundaries, and the Stage 5 local scheduler. Runtime execution remains model-agnostic and uses deterministic state transitions, explicit context/memory propagation, and bounded asynchronous workers.
 
 The capability layer defines typed capability and tool descriptors, scoped permissions, request/result lifecycles, and an auditable executor boundary. `mock.echo` is an in-process test capability; no operating-system or browser automation is implemented. Capability results enter context or scoped memory only through explicit caller selection.
 
@@ -334,51 +334,55 @@ Validated by tests covering:
 - restart recovery hydration
 - CLI inspection and recursive demo output
 
-### Stage 2 - Event System
+### Stage 2 - Context, State & Event Infrastructure
 
-Implement the event bus, event definitions, subscriptions, runtime events, live event stream, and persistence / audit trail.
+Status: IMPLEMENTED. Provides branch-local context, deterministic compilation, context snapshots, and machine-readable live events.
 
-### Stage 3 - Context + Memory
+### Stage 3 - Scoped Memory
 
-Implement the context compiler, scoped memory, mission state, branch state, runtime state, artifact references, relevance filtering, and provenance.
+Status: IMPLEMENTED. Provides typed, scoped, provenance-aware memory with durable SQLite history.
 
-### Stage 4 - Tool System
+### Stage 4 - Capability / Tool Boundary
 
-Implement common tool interfaces and begin with safe basic tools: filesystem, terminal, and process execution.
+Status: IMPLEMENTED. Defines typed capabilities, tools, requests/results, permissions, events, and a test-only `mock.echo` executor. No real computer-control tools are included.
 
-### Stage 5 - Model Router
+### Stage 5 - Scheduler / Execution Coordinator
 
-Add external reasoning API support through a provider abstraction. No model should be hard-coded into the runtime engine.
+Status: IMPLEMENTED. Coordinates existing runtimes through bounded workers, atomic claims, priority/fairness, dependencies, waiting, retries, timeouts, cancellation, durable scheduling state, and inspection. Scheduling is deterministic and does not perform reasoning.
 
-### Stage 6 - Laya Integration
+### Stage 6 - Model Router
+
+Add provider abstraction and policy-driven reasoning provider selection. No model is hard-coded into the runtime engine.
+
+### Stage 7 - Laya Integration
 
 Add Laya as a fast decision provider while keeping decision logic separate from reasoning logic.
 
-### Stage 7 - TUI
+### Stage 8 - TUI
 
 Build the Ratatui interface with mission view, runtime tree, agent view, event stream, system monitoring, model activity, and command input.
 
-### Stage 8 - Browser / Application Control
+### Stage 9 - Browser / Application Control
 
 Add controlled interfaces for browser, tabs, filesystem, IDEs, and applications.
 
-### Stage 9 - Skills
+### Stage 10 - Skills
 
 Create the skill registry and skill loading system.
 
-### Stage 10 - Advanced Agents
+### Stage 11 - Advanced Agents
 
 Build reusable agent definitions for research, coding, browser automation, security, academic work, reporting, and validation.
 
-### Stage 11 - Reliability
+### Stage 12 - Reliability
 
 Implement retries, crash recovery, runtime restoration, cancellation, timeouts, dependency handling, checkpointing, graceful shutdown, and mission resumption.
 
-### Stage 12 - Deep OS Integration
+### Stage 13 - Deep OS Integration
 
 After the core architecture is stable, add Linux system integration, process management, sandboxing, permissions, resource control, isolation, and system services.
 
-### Stage 13 - Wyvern Linux Environment
+### Stage 14 - Wyvern Linux Environment
 
 Explore a minimal Linux environment or distribution where Wyvern becomes the primary AI orchestration and control layer.
 
@@ -405,8 +409,11 @@ Stage 0 - Repository / Architecture: COMPLETED
 Stage 1 - Runtime Kernel: IMPLEMENTED
 Stage 1A - Runtime Kernel Hardening: COMPLETED
 Stage 2 - Context, State & Event Infrastructure: IMPLEMENTED
+Stage 3 - Scoped Memory: IMPLEMENTED
+Stage 4 - Capability / Tool Boundary: IMPLEMENTED
+Stage 5 - Scheduler / Execution Coordinator: IMPLEMENTED
 
-The Stage 1 runtime kernel and Stage 2 information-flow infrastructure are implemented and validated. Semantic memory, tools, model routing, Laya, and the TUI remain planned.
+The runtime kernel, branch-local context, scoped memory, capability boundary, and local scheduler are implemented and validated. Model routing, Laya, and the TUI remain planned.
 
 ## Future Architecture Diagrams
 

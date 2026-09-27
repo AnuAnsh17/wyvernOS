@@ -104,6 +104,8 @@ pub enum RuntimeState {
     Completed,
     Failed,
     Cancelled,
+    TimedOut,
+    Interrupted,
 }
 
 impl RuntimeState {
@@ -113,13 +115,27 @@ impl RuntimeState {
             Self::Ready => matches!(next, Self::Running | Self::Cancelled | Self::Failed),
             Self::Running => matches!(
                 next,
-                Self::Waiting | Self::Completed | Self::Failed | Self::Cancelled
+                Self::Waiting
+                    | Self::Completed
+                    | Self::Failed
+                    | Self::Cancelled
+                    | Self::TimedOut
+                    | Self::Interrupted
             ),
             Self::Waiting => matches!(
                 next,
-                Self::Running | Self::Completed | Self::Failed | Self::Cancelled
+                Self::Running
+                    | Self::Completed
+                    | Self::Failed
+                    | Self::Cancelled
+                    | Self::TimedOut
+                    | Self::Interrupted
             ),
-            Self::Completed | Self::Failed | Self::Cancelled => false,
+            Self::Completed
+            | Self::Failed
+            | Self::Cancelled
+            | Self::TimedOut
+            | Self::Interrupted => false,
         }
     }
 }
@@ -136,6 +152,8 @@ impl FromStr for RuntimeState {
             "Completed" => Ok(Self::Completed),
             "Failed" => Ok(Self::Failed),
             "Cancelled" => Ok(Self::Cancelled),
+            "TimedOut" => Ok(Self::TimedOut),
+            "Interrupted" => Ok(Self::Interrupted),
             _ => Err(WyvernError::Cli(format!("invalid runtime state: {value}"))),
         }
     }
@@ -151,6 +169,8 @@ impl fmt::Display for RuntimeState {
             Self::Completed => "Completed",
             Self::Failed => "Failed",
             Self::Cancelled => "Cancelled",
+            Self::TimedOut => "TimedOut",
+            Self::Interrupted => "Interrupted",
         };
         f.write_str(label)
     }

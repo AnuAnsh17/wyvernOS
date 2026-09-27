@@ -1,4 +1,5 @@
 use crate::domain::{MemoryId, MissionId, MissionState, RuntimeId, RuntimeState};
+use crate::scheduler::SchedulerState;
 use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, WyvernError>;
@@ -14,6 +15,11 @@ pub enum WyvernError {
     InvalidMissionStateTransition {
         from: MissionState,
         to: MissionState,
+    },
+    #[error("invalid scheduler state transition from {from:?} to {to:?}")]
+    InvalidSchedulerTransition {
+        from: SchedulerState,
+        to: SchedulerState,
     },
     #[error("parent not found: {0}")]
     ParentNotFound(RuntimeId),
@@ -37,6 +43,8 @@ pub enum WyvernError {
     ExecutionError(String),
     #[error("cancellation error: {0}")]
     CancellationError(String),
+    #[error("scheduler error: {0}")]
+    Scheduler(String),
     #[error("cli error: {0}")]
     Cli(String),
 }

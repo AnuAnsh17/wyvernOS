@@ -4,6 +4,7 @@ use crate::domain::{
 };
 use crate::error::Result;
 use crate::result::RuntimeOutcome;
+use crate::scheduler::SchedulerState;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
@@ -166,6 +167,15 @@ pub enum RuntimeEvent {
         error: String,
         timestamp: Timestamp,
     },
+    SchedulerStateChanged {
+        mission_id: MissionId,
+        runtime_id: RuntimeId,
+        parent_id: Option<RuntimeId>,
+        state: SchedulerState,
+        attempt: u32,
+        detail: Option<String>,
+        timestamp: Timestamp,
+    },
 }
 
 impl RuntimeEvent {
@@ -190,6 +200,7 @@ impl RuntimeEvent {
             | Self::CapabilityFailed { timestamp, .. }
             | Self::CapabilityCancelled { timestamp, .. }
             | Self::CapabilityRejected { timestamp, .. } => *timestamp,
+            Self::SchedulerStateChanged { timestamp, .. } => *timestamp,
         }
     }
 
@@ -214,6 +225,7 @@ impl RuntimeEvent {
             | Self::CapabilityFailed { runtime_id, .. }
             | Self::CapabilityCancelled { runtime_id, .. }
             | Self::CapabilityRejected { runtime_id, .. } => *runtime_id,
+            Self::SchedulerStateChanged { runtime_id, .. } => *runtime_id,
         }
     }
 }
@@ -481,6 +493,16 @@ impl EventBus {
             } => {
                 tracing::warn!(mission_id = %mission_id, runtime_id = %runtime_id, request_id = %request_id, capability_id = %capability_id, tool_id = %tool_id, error = %error, "capability.rejected")
             }
+            RuntimeEvent::SchedulerStateChanged {
+                mission_id,
+                runtime_id,
+                state,
+                attempt,
+                detail,
+                ..
+            } => {
+                tracing::info!(mission_id = %mission_id, runtime_id = %runtime_id, state = ?state, attempt = *attempt, detail = ?detail, "scheduler.runtime_state")
+            }
         }
     }
 }
@@ -507,6 +529,31 @@ impl RuntimeEvent {
             Self::CapabilityFailed { .. } => "capability.failed",
             Self::CapabilityCancelled { .. } => "capability.cancelled",
             Self::CapabilityRejected { .. } => "capability.rejected",
+            Self::SchedulerStateChanged { state, detail, .. }
+                if *state == SchedulerState::Queued
+                    && detail
+                        .as_deref()
+                        .is_some_and(|value| value.starts_with("retry after")) =>
+            {
+                "runtime.retry_scheduled"
+            }
+            Self::SchedulerStateChanged { state, detail, .. }
+                if *state == SchedulerState::Runnable && detail.as_deref() == Some("resumed") =>
+            {
+                "runtime.resumed"
+            }
+            Self::SchedulerStateChanged { state, .. } => match state {
+                SchedulerState::Queued => "runtime.queued",
+                SchedulerState::Runnable => "runtime.runnable",
+                SchedulerState::Running => "runtime.started",
+                SchedulerState::Waiting => "runtime.waiting",
+                SchedulerState::Completed => "runtime.completed",
+                SchedulerState::Failed => "runtime.failed",
+                SchedulerState::Cancelled => "runtime.cancelled",
+                SchedulerState::TimedOut => "runtime.timed_out",
+                SchedulerState::Blocked => "runtime.blocked",
+                SchedulerState::Interrupted => "runtime.interrupted",
+            },
         }
     }
 
@@ -531,6 +578,7 @@ impl RuntimeEvent {
             | Self::CapabilityFailed { mission_id, .. }
             | Self::CapabilityCancelled { mission_id, .. }
             | Self::CapabilityRejected { mission_id, .. } => *mission_id,
+            Self::SchedulerStateChanged { mission_id, .. } => *mission_id,
         }
     }
 
@@ -549,6 +597,7 @@ impl RuntimeEvent {
             | Self::CapabilityFailed { parent_id, .. }
             | Self::CapabilityCancelled { parent_id, .. }
             | Self::CapabilityRejected { parent_id, .. } => *parent_id,
+            Self::SchedulerStateChanged { parent_id, .. } => *parent_id,
             Self::ContextUpdated { parent_id, .. } => *parent_id,
             Self::MemoryCreated { .. }
             | Self::MemorySuperseded { .. }

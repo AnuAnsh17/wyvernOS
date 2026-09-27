@@ -188,6 +188,8 @@ async fn runtime_lifecycle_valid_and_invalid_transitions() {
         (RuntimeState::Completed, RuntimeState::Failed),
         (RuntimeState::Failed, RuntimeState::Running),
         (RuntimeState::Cancelled, RuntimeState::Running),
+        (RuntimeState::TimedOut, RuntimeState::Running),
+        (RuntimeState::Interrupted, RuntimeState::Running),
         (RuntimeState::Created, RuntimeState::Completed),
     ];
 
@@ -219,6 +221,16 @@ async fn runtime_lifecycle_valid_and_invalid_transitions() {
                 runtime.transition_to(RuntimeState::Ready).unwrap();
                 runtime.transition_to(RuntimeState::Running).unwrap();
                 runtime.transition_to(RuntimeState::Cancelled).unwrap();
+            }
+            RuntimeState::TimedOut => {
+                runtime.transition_to(RuntimeState::Ready).unwrap();
+                runtime.transition_to(RuntimeState::Running).unwrap();
+                runtime.transition_to(RuntimeState::TimedOut).unwrap();
+            }
+            RuntimeState::Interrupted => {
+                runtime.transition_to(RuntimeState::Ready).unwrap();
+                runtime.transition_to(RuntimeState::Running).unwrap();
+                runtime.transition_to(RuntimeState::Interrupted).unwrap();
             }
         }
         assert!(

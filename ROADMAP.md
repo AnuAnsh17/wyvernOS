@@ -72,7 +72,7 @@ Goals:
 
 ## Stage 3 - Scoped Memory
 
-Status: Planned
+Status: Implemented
 
 Goals:
 
@@ -84,18 +84,32 @@ Goals:
 - provenance
 - durable structured memory beyond active runtime context
 
-## Stage 4 - Tool System
+## Stage 4 - Capability / Tool Boundary
 
-Status: Planned
+Status: Implemented
 
 Goals:
 
 - common tool interfaces
-- filesystem
-- terminal
-- process execution
+- typed capability and tool descriptors
+- explicit scoped permission boundary
+- executor contract and in-process mock
+- request/result lifecycle, events, context/memory handoff
 
-## Stage 5 - Model Router
+## Stage 5 - Scheduler / Execution Coordinator
+
+Status: Implemented
+
+Goals:
+
+- bounded asynchronous worker pool and atomic runtime claims
+- deterministic priority with age-based fairness
+- explicit dependencies and blocked dependency failures
+- waiting, resume, timeout, cancellation, and retry/backoff
+- durable scheduler state and interrupted-runtime recovery
+- scheduler snapshots and CLI inspection
+
+## Stage 6 - Model Router
 
 Status: Planned
 
@@ -105,7 +119,7 @@ Goals:
 - external reasoning API support
 - policy-driven model selection
 
-## Stage 6 - Laya Integration
+## Stage 7 - Laya Integration
 
 Status: Planned
 
@@ -115,7 +129,7 @@ Goals:
 - deterministic decision logic
 - separation from reasoning
 
-## Stage 7 - TUI
+## Stage 8 - TUI
 
 Status: Planned
 
@@ -129,7 +143,7 @@ Goals:
 - model activity
 - command input
 
-## Stage 8 - Browser / Application Control
+## Stage 9 - Browser / Application Control
 
 Status: Planned
 
@@ -141,7 +155,7 @@ Goals:
 - IDE control
 - application control
 
-## Stage 9 - Skills
+## Stage 10 - Skills
 
 Status: Planned
 
@@ -150,7 +164,7 @@ Goals:
 - skill registry
 - skill loading system
 
-## Stage 10 - Advanced Agents
+## Stage 11 - Advanced Agents
 
 Status: Planned
 
@@ -164,7 +178,7 @@ Goals:
 - reporting
 - validation
 
-## Stage 11 - Reliability
+## Stage 12 - Reliability
 
 Status: Planned
 
@@ -180,7 +194,7 @@ Goals:
 - graceful shutdown
 - mission resumption
 
-## Stage 12 - Deep OS Integration
+## Stage 13 - Deep OS Integration
 
 Status: Planned
 
@@ -194,7 +208,7 @@ Goals:
 - isolation
 - system services
 
-## Stage 13 - Wyvern Linux Environment
+## Stage 14 - Wyvern Linux Environment
 
 Status: Planned
 

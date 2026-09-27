@@ -696,7 +696,10 @@ impl Kernel {
         self.inner.store.get_mission(mission_id).await
     }
 
-    async fn cancellation_receiver(&self, runtime_id: RuntimeId) -> Result<watch::Receiver<bool>> {
+    pub(crate) async fn cancellation_receiver(
+        &self,
+        runtime_id: RuntimeId,
+    ) -> Result<watch::Receiver<bool>> {
         let sender = self
             .inner
             .controls
@@ -838,9 +841,11 @@ impl Kernel {
         self.inner.runtimes.update(runtime.clone()).await;
         if runtime.parent_id.is_none() && next == RuntimeState::Running {
             if let Some(mut mission) = self.inner.missions.get(runtime.mission_id).await {
-                mission.transition_to(MissionState::Running)?;
-                self.inner.store.upsert_mission(&mission).await?;
-                self.inner.missions.update(mission.clone()).await;
+                if mission.state == MissionState::Created {
+                    mission.transition_to(MissionState::Running)?;
+                    self.inner.store.upsert_mission(&mission).await?;
+                    self.inner.missions.update(mission.clone()).await;
+                }
             }
         }
         self.publish(RuntimeEvent::RuntimeStateChanged {
@@ -915,7 +920,10 @@ impl Kernel {
 
     pub async fn cancel_runtime(&self, runtime_id: RuntimeId) -> Result<Runtime> {
         let mut runtime = self.get_runtime(runtime_id).await?;
-        if !matches!(runtime.state, RuntimeState::Running | RuntimeState::Waiting) {
+        if !matches!(
+            runtime.state,
+            RuntimeState::Ready | RuntimeState::Running | RuntimeState::Waiting
+        ) {
             return Err(WyvernError::CancellationError(format!(
                 "runtime {runtime_id} is not cancellable from state {}",
                 runtime.state
@@ -942,6 +950,60 @@ impl Kernel {
                 self.inner.missions.update(mission.clone()).await;
             }
         }
+        Ok(runtime)
+    }
+
+    pub async fn timeout_runtime(&self, runtime_id: RuntimeId) -> Result<Runtime> {
+        let runtime = self.get_runtime(runtime_id).await?;
+        let updated = self
+            .transition_runtime(runtime_id, RuntimeState::TimedOut)
+            .await?;
+        self.inner.controls.write().await.remove(&runtime_id);
+        if runtime.parent_id.is_none() {
+            if let Some(mut mission) = self.inner.missions.get(runtime.mission_id).await {
+                if mission.state == MissionState::Running {
+                    mission.transition_to(MissionState::Failed)?;
+                    self.inner.store.upsert_mission(&mission).await?;
+                    self.inner.missions.update(mission).await;
+                }
+            }
+        }
+        Ok(updated)
+    }
+
+    /// Marks a runtime interrupted during scheduler recovery without requiring its agent definition.
+    pub async fn mark_runtime_interrupted(&self, runtime_id: RuntimeId) -> Result<Runtime> {
+        let mut runtime = self.get_runtime(runtime_id).await?;
+        let from = runtime.state;
+        if from != RuntimeState::Running {
+            return Ok(runtime);
+        }
+        runtime.transition_to(RuntimeState::Interrupted)?;
+        if !self
+            .inner
+            .store
+            .update_runtime_state(
+                runtime_id,
+                from,
+                RuntimeState::Interrupted,
+                runtime.updated_at,
+            )
+            .await?
+        {
+            return Err(WyvernError::Scheduler(format!(
+                "runtime changed during recovery: {runtime_id}"
+            )));
+        }
+        self.inner.runtimes.update(runtime.clone()).await;
+        self.inner.controls.write().await.remove(&runtime_id);
+        self.publish(RuntimeEvent::RuntimeStateChanged {
+            mission_id: runtime.mission_id,
+            runtime_id,
+            parent_id: runtime.parent_id,
+            from,
+            to: RuntimeState::Interrupted,
+            timestamp: now_millis(),
+        })?;
         Ok(runtime)
     }
 

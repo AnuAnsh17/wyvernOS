@@ -11,6 +11,7 @@ pub mod kernel;
 pub mod memory;
 pub mod persistence;
 pub mod result;
+pub mod scheduler;
 
 pub use agent::{AgentDefinition, AgentId, AgentKind};
 pub use capability::{
@@ -33,3 +34,7 @@ pub use memory::{
     MemoryScope, MemoryStatus, MemoryStore, MemoryType,
 };
 pub use result::{RuntimeOutcome, RuntimeResult};
+pub use scheduler::{
+    RuntimeExecutionError, RuntimePriority, ScheduleOptions, ScheduledRuntime,
+    ScheduledRuntimeExecutor, Scheduler, SchedulerConfig, SchedulerSnapshot, SchedulerState,
+};

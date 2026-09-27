@@ -43,6 +43,17 @@ pub trait RuntimeStore: Send + Sync {
     async fn list_runtimes(&self) -> Result<Vec<PersistedRuntime>>;
     async fn get_mission(&self, mission_id: MissionId) -> Result<Option<PersistedMission>>;
     async fn get_runtime(&self, runtime_id: RuntimeId) -> Result<Option<PersistedRuntime>>;
+    async fn update_runtime_state(
+        &self,
+        _runtime_id: RuntimeId,
+        _expected: RuntimeState,
+        _next: RuntimeState,
+        _updated_at: i64,
+    ) -> Result<bool> {
+        Err(WyvernError::Scheduler(
+            "runtime store does not support atomic state recovery".into(),
+        ))
+    }
 }
 
 #[derive(Clone)]
@@ -227,6 +238,25 @@ impl RuntimeStore for SqliteRuntimeStore {
         .fetch_optional(&self.pool)
         .await?;
         Ok(runtime)
+    }
+
+    async fn update_runtime_state(
+        &self,
+        runtime_id: RuntimeId,
+        expected: RuntimeState,
+        next: RuntimeState,
+        updated_at: i64,
+    ) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE runtimes SET state = ?3, updated_at = ?4 WHERE runtime_id = ?1 AND state = ?2",
+        )
+        .bind(runtime_id.to_string())
+        .bind(expected.to_string())
+        .bind(next.to_string())
+        .bind(updated_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
     }
 }
 

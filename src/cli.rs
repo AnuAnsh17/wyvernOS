@@ -3,6 +3,7 @@ use crate::domain::{CapabilityId, MemoryId, MissionId, RuntimeId, ToolId};
 use crate::error::{Result, WyvernError};
 use crate::kernel::Kernel;
 use crate::memory::MemoryScope;
+use crate::scheduler::Scheduler;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
@@ -46,6 +47,10 @@ pub enum Commands {
     Tool {
         #[command(subcommand)]
         command: ToolCommands,
+    },
+    Scheduler {
+        #[command(subcommand)]
+        command: SchedulerCommands,
     },
 }
 
@@ -103,6 +108,11 @@ pub enum CapabilityCommands {
 pub enum ToolCommands {
     List,
     Inspect { tool: String },
+}
+
+#[derive(Subcommand)]
+pub enum SchedulerCommands {
+    Status,
 }
 
 pub async fn run() -> Result<()> {
@@ -317,6 +327,15 @@ pub async fn run() -> Result<()> {
                 } else {
                     return Err(WyvernError::Cli(format!("tool not found: {tool}")));
                 }
+            }
+        },
+        Commands::Scheduler { command } => match command {
+            SchedulerCommands::Status => {
+                let status = Scheduler::inspect_database(&cli.database).await?;
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&status).unwrap_or_default()
+                );
             }
         },
     }

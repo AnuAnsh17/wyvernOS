@@ -138,6 +138,18 @@ A runtime submits a `CapabilityRequest` with mission/runtime identity, capabilit
 
 Results are returned as typed `CapabilityResult` values. They are not added to runtime context or memory automatically: callers explicitly select results for context compilation or convert a successful result to a `MemoryDraft`. The in-process `mock.echo` executor demonstrates this flow for tests. No browser, filesystem, process, network, model, or OS execution implementation is registered by default.
 
+### Stage 5 Scheduler
+
+The Scheduler coordinates already-created Runtime instances; it does not create task plans, choose agents, or interpret objectives. `Scheduler` owns a bounded set of asynchronous workers and persists scheduling metadata beside the existing SQLite runtime store. Runtime identity and hierarchy remain owned by `Runtime`; scheduler records contain queue state, dependencies, priority, attempt counts, and scheduling timestamps.
+
+The scheduler state flow is `Queued → Runnable → Running`, with `Running → Waiting → Runnable` for suspended work and terminal `Completed`, `Failed`, `Cancelled`, `TimedOut`, `Blocked`, or `Interrupted` states. Claims use a SQLite transaction and conditional state update, so only one worker can claim a scheduled runtime. Worker execution occurs outside database locks. Priority is deterministic and incorporates FIFO age: waiting time gradually raises effective priority to prevent starvation.
+
+Dependencies are explicit runtime IDs within the same mission. A dependent is runnable only after every scheduled predecessor completes successfully. Failed, cancelled, timed out, blocked, or interrupted predecessors move the dependent to `Blocked`; the scheduler does not run it with missing prerequisites. A parent waiting for its child set becomes runnable after all direct children reach terminal states, including failure, so its executor can handle those outcomes.
+
+Retry applies only when an executor returns a retryable typed failure and the runtime's explicit retry budget remains. The scheduler uses bounded exponential backoff. Timeouts and cancellation stop awaiting the executor future and release a worker slot; an underlying external operation may require its own cancellation support. Waiting and resumed work invoke the executor again, so executors that use waiting must be restartable or checkpoint their progress.
+
+Scheduler lifecycle changes use the existing EventBus/EventEnvelope. Scheduling metadata is durable; after restart, records left `Running` become `Interrupted`, and persisted runtime state is marked `Interrupted`. They are not automatically resumed because Wyvern cannot assume that in-flight external work survived the process. The scheduler does not write operational status to Memory and does not implement capability execution; executors may use the Stage 4 capability boundary independently.
+
 ### System Adapters
 
 OS-specific behavior belongs behind adapters.
