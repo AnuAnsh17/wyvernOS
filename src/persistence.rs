@@ -1,19 +1,20 @@
 use crate::agent::AgentDefinition;
-use crate::domain::{Mission, MissionId, RuntimeId};
+use crate::domain::{AgentId, Mission, MissionId, MissionState, RuntimeId, RuntimeState};
 use crate::error::{Result, WyvernError};
-use crate::kernel::Runtime;
 use crate::result::RuntimeResult;
+use crate::Runtime;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::{FromRow, SqlitePool};
 use std::path::Path;
+use std::str::FromStr;
 
 #[derive(Clone, Debug, Serialize, Deserialize, FromRow)]
 pub struct PersistedMission {
-    pub mission_id: i64,
+    pub mission_id: String,
     pub objective: String,
-    pub root_runtime_id: Option<i64>,
+    pub root_runtime_id: Option<String>,
     pub state: String,
     pub created_at: i64,
     pub updated_at: i64,
@@ -21,12 +22,12 @@ pub struct PersistedMission {
 
 #[derive(Clone, Debug, Serialize, Deserialize, FromRow)]
 pub struct PersistedRuntime {
-    pub runtime_id: i64,
-    pub mission_id: i64,
-    pub agent_id: i64,
+    pub runtime_id: String,
+    pub mission_id: String,
+    pub agent_id: String,
     pub agent_name: String,
     pub agent_kind: String,
-    pub parent_id: Option<i64>,
+    pub parent_id: Option<String>,
     pub objective: String,
     pub state: String,
     pub created_at: i64,
@@ -68,9 +69,9 @@ impl SqliteRuntimeStore {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS missions (
-                mission_id INTEGER PRIMARY KEY,
+                mission_id TEXT PRIMARY KEY,
                 objective TEXT NOT NULL,
-                root_runtime_id INTEGER NULL,
+                root_runtime_id TEXT NULL,
                 state TEXT NOT NULL,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
@@ -83,12 +84,12 @@ impl SqliteRuntimeStore {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS runtimes (
-                runtime_id INTEGER PRIMARY KEY,
-                mission_id INTEGER NOT NULL,
-                agent_id INTEGER NOT NULL,
+                runtime_id TEXT PRIMARY KEY,
+                mission_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
                 agent_name TEXT NOT NULL,
                 agent_kind TEXT NOT NULL,
-                parent_id INTEGER NULL,
+                parent_id TEXT NULL,
                 objective TEXT NOT NULL,
                 state TEXT NOT NULL,
                 created_at INTEGER NOT NULL,
@@ -119,9 +120,9 @@ impl RuntimeStore for SqliteRuntimeStore {
                 updated_at = excluded.updated_at
             "#,
         )
-        .bind(mission.id.value() as i64)
+        .bind(mission.id.to_string())
         .bind(&mission.objective)
-        .bind(mission.root_runtime_id.map(|id| id.value() as i64))
+        .bind(mission.root_runtime_id.map(|id| id.to_string()))
         .bind(mission.state.to_string())
         .bind(mission.created_at)
         .bind(mission.updated_at)
@@ -136,7 +137,7 @@ impl RuntimeStore for SqliteRuntimeStore {
             .as_ref()
             .map(serde_json::to_string)
             .transpose()
-            .map_err(|err| WyvernError::Execution(err.to_string()))?;
+            .map_err(|err| WyvernError::ExecutionError(err.to_string()))?;
 
         sqlx::query(
             r#"
@@ -158,12 +159,12 @@ impl RuntimeStore for SqliteRuntimeStore {
                 result_json = excluded.result_json
             "#,
         )
-        .bind(runtime.id.value() as i64)
-        .bind(runtime.mission_id.value() as i64)
-        .bind(runtime.agent_id.value() as i64)
+        .bind(runtime.id.to_string())
+        .bind(runtime.mission_id.to_string())
+        .bind(runtime.agent_id.to_string())
         .bind(&agent.name)
         .bind(agent.kind.to_string())
-        .bind(runtime.parent_id.map(|id| id.value() as i64))
+        .bind(runtime.parent_id.map(|id| id.to_string()))
         .bind(&runtime.objective)
         .bind(runtime.state.to_string())
         .bind(runtime.created_at)
@@ -208,7 +209,7 @@ impl RuntimeStore for SqliteRuntimeStore {
             WHERE mission_id = ?1
             "#,
         )
-        .bind(mission_id.value() as i64)
+        .bind(mission_id.to_string())
         .fetch_optional(&self.pool)
         .await?;
         Ok(mission)
@@ -222,7 +223,7 @@ impl RuntimeStore for SqliteRuntimeStore {
             WHERE runtime_id = ?1
             "#,
         )
-        .bind(runtime_id.value() as i64)
+        .bind(runtime_id.to_string())
         .fetch_optional(&self.pool)
         .await?;
         Ok(runtime)
@@ -234,5 +235,41 @@ impl PersistedRuntime {
         self.result_json
             .as_ref()
             .and_then(|json| serde_json::from_str(json).ok())
+    }
+
+    pub fn into_runtime(&self) -> Result<Runtime> {
+        Ok(Runtime {
+            id: RuntimeId::from_str(&self.runtime_id)?,
+            mission_id: MissionId::from_str(&self.mission_id)?,
+            agent_id: AgentId::from_str(&self.agent_id)?,
+            parent_id: self
+                .parent_id
+                .as_ref()
+                .map(|value| RuntimeId::from_str(value))
+                .transpose()?,
+            objective: self.objective.clone(),
+            state: RuntimeState::from_str(&self.state)?,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            children: Vec::new(),
+            result: self.result(),
+        })
+    }
+}
+
+impl PersistedMission {
+    pub fn into_mission(&self) -> Result<Mission> {
+        Ok(Mission {
+            id: MissionId::from_str(&self.mission_id)?,
+            objective: self.objective.clone(),
+            root_runtime_id: self
+                .root_runtime_id
+                .as_ref()
+                .map(|value| RuntimeId::from_str(value))
+                .transpose()?,
+            state: MissionState::from_str(&self.state)?,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+        })
     }
 }

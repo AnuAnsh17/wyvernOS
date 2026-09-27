@@ -15,16 +15,26 @@ pub enum WyvernError {
         from: MissionState,
         to: MissionState,
     },
+    #[error("parent not found: {0}")]
+    ParentNotFound(RuntimeId),
+    #[error("cross-mission hierarchy error: parent {parent_id} belongs to {parent_mission_id} but runtime targets {child_mission_id}")]
+    CrossMissionHierarchyError {
+        parent_id: RuntimeId,
+        parent_mission_id: MissionId,
+        child_mission_id: MissionId,
+    },
     #[error("runtime not found: {0}")]
     RuntimeNotFound(RuntimeId),
     #[error("mission not found: {0}")]
     MissionNotFound(MissionId),
     #[error("persistence error: {0}")]
-    Persistence(#[from] sqlx::Error),
+    PersistenceError(#[from] sqlx::Error),
     #[error("event error: {0}")]
-    Event(String),
+    EventError(String),
     #[error("execution error: {0}")]
-    Execution(String),
+    ExecutionError(String),
+    #[error("cancellation error: {0}")]
+    CancellationError(String),
     #[error("cli error: {0}")]
     Cli(String),
 }

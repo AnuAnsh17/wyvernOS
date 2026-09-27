@@ -1,31 +1,27 @@
 use crate::error::{Result, WyvernError};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+use uuid::Uuid;
 
-static NEXT_MISSION_ID: AtomicU64 = AtomicU64::new(1);
-static NEXT_RUNTIME_ID: AtomicU64 = AtomicU64::new(1);
-static NEXT_AGENT_ID: AtomicU64 = AtomicU64::new(1);
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct RuntimeId(Uuid);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
-pub struct RuntimeId(u64);
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct MissionId(Uuid);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
-pub struct MissionId(u64);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
-pub struct AgentId(u64);
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct AgentId(Uuid);
 
 macro_rules! impl_id {
-    ($name:ident, $prefix:literal, $next:ident) => {
+    ($name:ident, $prefix:literal) => {
         impl $name {
             pub fn new() -> Self {
-                Self($next.fetch_add(1, Ordering::Relaxed))
+                Self(Uuid::now_v7())
             }
 
-            pub fn value(self) -> u64 {
+            pub fn as_uuid(self) -> Uuid {
                 self.0
             }
         }
@@ -36,6 +32,25 @@ macro_rules! impl_id {
             }
         }
 
+        impl Serialize for $name {
+            fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+            where
+                S: Serializer,
+            {
+                serializer.serialize_str(&self.to_string())
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                let value = String::deserialize(deserializer)?;
+                Self::from_str(&value).map_err(serde::de::Error::custom)
+            }
+        }
+
         impl FromStr for $name {
             type Err = WyvernError;
 
@@ -43,8 +58,7 @@ macro_rules! impl_id {
                 let Some(raw) = value.strip_prefix(concat!($prefix)) else {
                     return Err(WyvernError::Cli(format!("invalid id: {value}")));
                 };
-                let parsed = raw
-                    .parse::<u64>()
+                let parsed = Uuid::parse_str(raw)
                     .map_err(|_| WyvernError::Cli(format!("invalid id: {value}")))?;
                 Ok(Self(parsed))
             }
@@ -52,9 +66,9 @@ macro_rules! impl_id {
     };
 }
 
-impl_id!(RuntimeId, "rt_", NEXT_RUNTIME_ID);
-impl_id!(MissionId, "mission_", NEXT_MISSION_ID);
-impl_id!(AgentId, "agent_", NEXT_AGENT_ID);
+impl_id!(RuntimeId, "rt_");
+impl_id!(MissionId, "mission_");
+impl_id!(AgentId, "agent_");
 
 pub type Timestamp = i64;
 
@@ -85,8 +99,28 @@ impl RuntimeState {
                 next,
                 Self::Waiting | Self::Completed | Self::Failed | Self::Cancelled
             ),
-            Self::Waiting => matches!(next, Self::Completed | Self::Failed | Self::Cancelled),
+            Self::Waiting => matches!(
+                next,
+                Self::Running | Self::Completed | Self::Failed | Self::Cancelled
+            ),
             Self::Completed | Self::Failed | Self::Cancelled => false,
+        }
+    }
+}
+
+impl FromStr for RuntimeState {
+    type Err = WyvernError;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value {
+            "Created" => Ok(Self::Created),
+            "Ready" => Ok(Self::Ready),
+            "Running" => Ok(Self::Running),
+            "Waiting" => Ok(Self::Waiting),
+            "Completed" => Ok(Self::Completed),
+            "Failed" => Ok(Self::Failed),
+            "Cancelled" => Ok(Self::Cancelled),
+            _ => Err(WyvernError::Cli(format!("invalid runtime state: {value}"))),
         }
     }
 }
@@ -121,6 +155,21 @@ impl MissionState {
             Self::Created => matches!(next, Self::Running | Self::Cancelled | Self::Failed),
             Self::Running => matches!(next, Self::Completed | Self::Failed | Self::Cancelled),
             Self::Completed | Self::Failed | Self::Cancelled => false,
+        }
+    }
+}
+
+impl FromStr for MissionState {
+    type Err = WyvernError;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value {
+            "Created" => Ok(Self::Created),
+            "Running" => Ok(Self::Running),
+            "Completed" => Ok(Self::Completed),
+            "Failed" => Ok(Self::Failed),
+            "Cancelled" => Ok(Self::Cancelled),
+            _ => Err(WyvernError::Cli(format!("invalid mission state: {value}"))),
         }
     }
 }

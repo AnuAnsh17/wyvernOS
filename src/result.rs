@@ -37,6 +37,40 @@ impl RuntimeResult {
             timestamp: crate::domain::now_millis(),
         }
     }
+
+    pub fn failed(
+        runtime_id: RuntimeId,
+        summary: impl Into<String>,
+        data: Value,
+        child_results: Vec<RuntimeResult>,
+    ) -> Self {
+        Self {
+            runtime_id,
+            status: RuntimeOutcome::Failed,
+            summary: summary.into(),
+            data,
+            child_results,
+            artifacts: Vec::new(),
+            timestamp: crate::domain::now_millis(),
+        }
+    }
+
+    pub fn cancelled(
+        runtime_id: RuntimeId,
+        summary: impl Into<String>,
+        data: Value,
+        child_results: Vec<RuntimeResult>,
+    ) -> Self {
+        Self {
+            runtime_id,
+            status: RuntimeOutcome::Cancelled,
+            summary: summary.into(),
+            data,
+            child_results,
+            artifacts: Vec::new(),
+            timestamp: crate::domain::now_millis(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -52,7 +86,10 @@ mod tests {
         assert_eq!(result.runtime_id, runtime_id);
         assert_eq!(result.status, RuntimeOutcome::Completed);
         assert_eq!(result.data["ok"], true);
-        let encoded = serde_json::to_string(&result).unwrap();
+        let encoded = match serde_json::to_string(&result) {
+            Ok(value) => value,
+            Err(error) => panic!("serialization failed: {error}"),
+        };
         assert!(encoded.contains("done"));
     }
 }

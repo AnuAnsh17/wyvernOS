@@ -20,6 +20,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 thiserror = "2"
 async-trait = "0.1"
 async-recursion = "1"
+uuid = { version = "1", features = ["v7", "serde"] }
 
 [dev-dependencies]
 tempfile = "3"
