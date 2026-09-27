@@ -2,7 +2,7 @@
 
 Wyvern is a local-first, AI-native orchestration and control system. It is not a chatbot, a single agent, or a single model wrapper. The project is intended to become a persistent runtime layer that coordinates specialized agent runtimes, tools, external reasoning models, local applications, browsers, terminals, IDEs, filesystems, security tools, and eventually deeper operating-system capabilities.
 
-This repository currently defines the architecture and staged implementation plan only. The runtime engine itself is intentionally not implemented yet.
+This repository now includes the implemented Stage 1 runtime kernel and Stage 1A hardening work. The current codebase provides a deterministic recursive runtime substrate with persistence, event publication, CLI inspection, and restart recovery, while later layers remain planned.
 
 ## Vision
 
@@ -286,28 +286,51 @@ Do not add abstractions just because the system might scale in theory. Build the
 
 ## Stage Roadmap
 
-Stage 0 is complete. Stage 1 is now in progress and the runtime kernel has been implemented and validated.
+Stage 0 is completed, Stage 1 is implemented, and Stage 1A is completed.
 
 ### Stage 0 - Repository / Architecture
 
-Status: completed.
+Status: COMPLETED.
 
-Create repository structure, documentation, architecture diagrams, contracts, design decisions, and development rules. No runtime implementation yet.
+Create the repository structure, documentation, architecture diagrams, contracts, design decisions, and development rules.
 
 ### Stage 1 - Runtime Kernel
 
-Status: in progress.
+Status: IMPLEMENTED.
 
-Implemented so far:
+Implemented capabilities:
 
-- typed runtime, mission, and agent identities
+- typed Mission, Runtime, and Agent IDs
+- persistent-safe UUID-based IDs with human-readable prefixes
 - runtime lifecycle state machine
-- runtime registry and parent/child hierarchy
-- asynchronous recursive execution
-- deterministic demo executor
-- event emission for runtime lifecycle transitions
+- recursive parent/child hierarchy
+- concurrent runtime execution
+- multi-mission support
+- failure handling
+- cancellation
 - SQLite persistence for missions, runtimes, and results
-- minimal CLI for demo, mission, and runtime inspection
+- restart/recovery hydration from SQLite
+- runtime event publication
+- deterministic demo executor
+- CLI inspection for missions and runtimes
+
+### Stage 1A - Runtime Kernel Hardening
+
+Status: COMPLETED.
+
+Validated by tests covering:
+
+- lifecycle transitions
+- restart-safe IDs
+- parent/child integrity
+- cross-mission rejection
+- recursive tree execution
+- concurrent missions and concurrent queries
+- failure propagation
+- cancellation
+- event publication to multiple subscribers
+- restart recovery hydration
+- CLI inspection and recursive demo output
 
 ### Stage 2 - Event System
 
@@ -376,9 +399,11 @@ The goal is to prove the runtime kernel.
 
 ## Current Status
 
-Stage 0 only.
+Stage 0 - Repository / Architecture: COMPLETED
+Stage 1 - Runtime Kernel: IMPLEMENTED
+Stage 1A - Runtime Kernel Hardening: COMPLETED
 
-The repository now captures the system's architecture and development plan. The runtime engine, event bus, context compiler, memory system, tool system, model router, and TUI are intentionally not implemented yet.
+The repository now captures the system's architecture and development plan. The Stage 1 runtime kernel is implemented and validated; later layers such as the context compiler, memory system, tool system, model router, and TUI remain planned.
 
 ## Future Architecture Diagrams
 

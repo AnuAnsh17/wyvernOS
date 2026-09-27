@@ -10,7 +10,7 @@ This roadmap tracks the staged development plan for Wyvern.
 
 ## Stage 0 - Repository / Architecture
 
-Status: Completed
+Status: COMPLETED
 
 Goals:
 
@@ -18,25 +18,44 @@ Goals:
 - document the architecture
 - define the development philosophy
 - capture the staged implementation plan
-- leave runtime behavior unimplemented
 
 ## Stage 1 - Runtime Kernel
 
-Status: In Progress
+Status: IMPLEMENTED
 
 Goals:
 
-- runtime structure
-- agent definition
-- runtime lifecycle
-- parent/child hierarchy
-- async execution
-- basic scheduler
-- basic state persistence
+- typed Mission/Runtime/Agent IDs
+- persistent-safe UUID-based IDs
+- runtime lifecycle state machine
+- recursive parent/child hierarchy
+- concurrent runtime execution
+- multi-mission support
+- failure handling
+- cancellation
+- SQLite persistence
+- restart/recovery hydration
+- runtime event publication
+- deterministic demo executor
+- CLI inspection
 
-Target outcome:
+## Stage 1A - Runtime Kernel Hardening
 
-Runtime A can create Runtime B, which can create Runtime C, execute a task, return a structured result, update its parent, and terminate.
+Status: COMPLETED
+
+Goals:
+
+- validation tests for lifecycle transitions
+- restart-safe ID verification
+- parent/child integrity checks
+- cross-mission rejection checks
+- recursive tree execution checks
+- concurrent mission execution checks
+- failure propagation checks
+- cancellation checks
+- event subscriber checks
+- restart recovery checks
+- CLI inspection and recursive demo checks
 
 ## Stage 2 - Event System
 

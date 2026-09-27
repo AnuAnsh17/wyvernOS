@@ -184,9 +184,9 @@ The lifecycle should be asynchronous and event-driven.
 
 ## Persistence
 
-Stage 0 does not implement persistence, but the architecture assumes state storage from the beginning.
+The Stage 1 runtime kernel persists missions, runtimes, and structured results in SQLite, and Stage 1A adds restart hydration to reload persisted state into the in-memory registries.
 
-Expected persisted records include:
+Persisted records include:
 
 - missions
 - runtimes
@@ -224,13 +224,15 @@ The initial architecture does not include:
 
 ## Stage 1 Implementation Notes
 
-The initial kernel is intentionally small and deterministic.
+The implemented kernel is intentionally small and deterministic.
 
 Current implementation choices:
 
-- strongly typed numeric IDs with human-readable prefixes for CLI output
+- strongly typed Mission, Runtime, and Agent IDs backed by UUID v7 values with human-readable prefixes for CLI output
 - in-memory runtime and mission registries for active state
 - SQLite persistence as the durable source of record
+- restart hydration from SQLite into live registries
 - broadcast-based event distribution for runtime lifecycle notifications
+- cancellation-aware execution and lifecycle validation
 - a deterministic demo executor that proves recursive asynchronous execution without LLM involvement
 - agent definitions stored separately from runtime instances, with execution behavior still fixed by the stage-1 demo recipe rather than model reasoning
