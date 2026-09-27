@@ -6,6 +6,7 @@ use crate::context::{
 use crate::domain::{now_millis, Mission, MissionId, MissionState, RuntimeId, RuntimeState};
 use crate::error::{Result, WyvernError};
 use crate::events::{EventBus, RuntimeEvent};
+use crate::memory::{MemoryDraft, MemoryItem, MemoryStore};
 use crate::persistence::{RuntimeStore, SqliteRuntimeStore};
 use crate::result::RuntimeResult;
 use async_recursion::async_recursion;
@@ -205,27 +206,33 @@ struct KernelInner {
     pub events: EventBus,
     pub store: Arc<dyn RuntimeStore>,
     pub context_store: ContextStore,
+    pub memory_store: MemoryStore,
     pub controls: RwLock<HashMap<RuntimeId, watch::Sender<bool>>>,
 }
 
 impl Kernel {
     pub async fn new(store: Arc<dyn RuntimeStore>) -> Result<Self> {
         let context_store = ContextStore::in_memory().await?;
-        Self::new_with_context_store(store, context_store).await
+        let events = EventBus::new(1024);
+        let memory_store = MemoryStore::in_memory(events.clone()).await?;
+        Self::new_with_stores(store, context_store, memory_store, events).await
     }
 
-    async fn new_with_context_store(
+    async fn new_with_stores(
         store: Arc<dyn RuntimeStore>,
         context_store: ContextStore,
+        memory_store: MemoryStore,
+        events: EventBus,
     ) -> Result<Self> {
         let kernel = Self {
             inner: Arc::new(KernelInner {
                 agents: AgentRegistry::default(),
                 missions: MissionRegistry::default(),
                 runtimes: RuntimeRegistry::default(),
-                events: EventBus::new(1024),
+                events,
                 store,
                 context_store,
+                memory_store,
                 controls: RwLock::new(HashMap::new()),
             }),
         };
@@ -236,11 +243,112 @@ impl Kernel {
     pub async fn new_sqlite(path: impl AsRef<Path>) -> Result<Self> {
         let store = SqliteRuntimeStore::open(&path).await?;
         let context_store = ContextStore::open(&path).await?;
-        Self::new_with_context_store(Arc::new(store), context_store).await
+        let events = EventBus::new(1024);
+        let memory_store = MemoryStore::open(&path, events.clone()).await?;
+        Self::new_with_stores(Arc::new(store), context_store, memory_store, events).await
     }
 
     pub fn contexts(&self) -> ContextStore {
         self.inner.context_store.clone()
+    }
+
+    pub fn memories(&self) -> MemoryStore {
+        self.inner.memory_store.clone()
+    }
+
+    pub async fn create_memory(&self, draft: MemoryDraft) -> Result<MemoryItem> {
+        self.validate_memory_draft(&draft).await?;
+        self.inner.memory_store.create(draft).await
+    }
+
+    pub async fn supersede_memory(
+        &self,
+        memory_id: crate::domain::MemoryId,
+        draft: MemoryDraft,
+    ) -> Result<MemoryItem> {
+        self.validate_memory_draft(&draft).await?;
+        self.inner.memory_store.supersede(memory_id, draft).await
+    }
+
+    pub async fn promote_memory(
+        &self,
+        memory_id: crate::domain::MemoryId,
+        target_runtime: RuntimeId,
+    ) -> Result<MemoryItem> {
+        let source = self
+            .inner
+            .memory_store
+            .get(memory_id)
+            .await?
+            .ok_or(WyvernError::MemoryNotFound(memory_id))?;
+        let target = self.get_runtime(target_runtime).await?;
+        if source.mission_id != target.mission_id {
+            return Err(WyvernError::ExecutionError(
+                "promoted memory target belongs to another mission".into(),
+            ));
+        }
+        self.inner
+            .memory_store
+            .promote(memory_id, target_runtime)
+            .await
+    }
+
+    async fn validate_memory_draft(&self, draft: &MemoryDraft) -> Result<()> {
+        self.get_mission(draft.mission_id).await?;
+        let source_runtime_id = draft.provenance.source_runtime_id.ok_or_else(|| {
+            WyvernError::ExecutionError("memory provenance requires a source runtime".into())
+        })?;
+        let source = self.get_runtime(source_runtime_id).await?;
+        if source.mission_id != draft.mission_id {
+            return Err(WyvernError::ExecutionError(
+                "memory provenance runtime belongs to another mission".into(),
+            ));
+        }
+        if draft
+            .provenance
+            .source_agent_id
+            .is_some_and(|agent_id| agent_id != source.agent_id)
+        {
+            return Err(WyvernError::ExecutionError(
+                "memory provenance agent does not match its source runtime".into(),
+            ));
+        }
+        if let Some(runtime_id) = draft.runtime_id {
+            if self.get_runtime(runtime_id).await?.mission_id != draft.mission_id {
+                return Err(WyvernError::ExecutionError(
+                    "runtime-scoped memory owner belongs to another mission".into(),
+                ));
+            }
+        }
+        if let Some(branch_id) = draft.branch_id {
+            if self.get_runtime(branch_id).await?.mission_id != draft.mission_id {
+                return Err(WyvernError::ExecutionError(
+                    "branch-scoped memory owner belongs to another mission".into(),
+                ));
+            }
+        }
+        if let Some(agent_id) = draft.agent_id {
+            if self.inner.agents.get(agent_id).await.is_none() {
+                return Err(WyvernError::ExecutionError(format!(
+                    "agent-scoped memory owner is not registered: {agent_id}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn visible_memories(&self, runtime_id: RuntimeId) -> Result<Vec<MemoryItem>> {
+        let runtime = self.get_runtime(runtime_id).await?;
+        let mut ancestors = vec![runtime_id];
+        let mut parent_id = runtime.parent_id;
+        while let Some(id) = parent_id {
+            ancestors.push(id);
+            parent_id = self.get_runtime(id).await?.parent_id;
+        }
+        self.inner
+            .memory_store
+            .visible_to_runtime(runtime.mission_id, runtime_id, runtime.agent_id, &ancestors)
+            .await
     }
 
     pub async fn add_context_fact(
@@ -294,6 +402,27 @@ impl Kernel {
         child_outputs: Vec<StructuredChildOutput>,
         constraints: Vec<String>,
     ) -> Result<RuntimeContext> {
+        self.compile_context_with_memory(
+            runtime_id,
+            inherited_context,
+            relevant_events,
+            child_outputs,
+            constraints,
+            Vec::new(),
+        )
+        .await
+    }
+
+    /// Compiles an explicit memory selection. The compiler never queries storage.
+    pub async fn compile_context_with_memory(
+        &self,
+        runtime_id: RuntimeId,
+        inherited_context: Vec<ContextItem>,
+        relevant_events: Vec<crate::events::EventEnvelope>,
+        child_outputs: Vec<StructuredChildOutput>,
+        constraints: Vec<String>,
+        selected_memories: Vec<MemoryItem>,
+    ) -> Result<RuntimeContext> {
         let runtime = self.get_runtime(runtime_id).await?;
         let context =
             crate::context::ContextCompiler::compile(crate::context::ContextCompileInput {
@@ -313,6 +442,7 @@ impl Kernel {
                 local_facts: self.context(runtime_id).await?.local_facts,
                 relevant_events,
                 child_outputs,
+                selected_memories,
                 constraints,
                 metadata: Vec::new(),
             });

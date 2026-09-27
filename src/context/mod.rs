@@ -3,6 +3,7 @@
 use crate::domain::{now_millis, MissionId, RuntimeId, RuntimeState, Timestamp};
 use crate::error::{Result, WyvernError};
 use crate::events::EventEnvelope;
+use crate::memory::MemoryItem;
 use crate::result::{RuntimeOutcome, RuntimeResult};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -71,6 +72,8 @@ pub struct RuntimeContext {
     pub local_facts: Vec<ContextItem>,
     pub relevant_events: Vec<EventEnvelope>,
     pub child_outputs: Vec<StructuredChildOutput>,
+    #[serde(default)]
+    pub selected_memories: Vec<MemoryItem>,
     pub constraints: Vec<String>,
     pub metadata: Vec<ContextItem>,
 }
@@ -122,6 +125,7 @@ pub struct ContextCompileInput {
     pub local_facts: Vec<ContextItem>,
     pub relevant_events: Vec<EventEnvelope>,
     pub child_outputs: Vec<StructuredChildOutput>,
+    pub selected_memories: Vec<MemoryItem>,
     pub constraints: Vec<String>,
     pub metadata: Vec<ContextItem>,
 }
@@ -137,6 +141,7 @@ impl ContextCompiler {
             local_facts: input.local_facts,
             relevant_events: input.relevant_events,
             child_outputs: input.child_outputs,
+            selected_memories: input.selected_memories,
             constraints: input.constraints,
             metadata: input.metadata,
         }

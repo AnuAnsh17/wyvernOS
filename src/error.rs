@@ -1,4 +1,4 @@
-use crate::domain::{MissionId, MissionState, RuntimeId, RuntimeState};
+use crate::domain::{MemoryId, MissionId, MissionState, RuntimeId, RuntimeState};
 use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, WyvernError>;
@@ -27,6 +27,8 @@ pub enum WyvernError {
     RuntimeNotFound(RuntimeId),
     #[error("mission not found: {0}")]
     MissionNotFound(MissionId),
+    #[error("memory not found: {0}")]
+    MemoryNotFound(MemoryId),
     #[error("persistence error: {0}")]
     PersistenceError(#[from] sqlx::Error),
     #[error("event error: {0}")]

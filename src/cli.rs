@@ -1,6 +1,7 @@
-use crate::domain::{MissionId, RuntimeId};
+use crate::domain::{MemoryId, MissionId, RuntimeId};
 use crate::error::{Result, WyvernError};
 use crate::kernel::Kernel;
+use crate::memory::MemoryScope;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
@@ -33,6 +34,10 @@ pub enum Commands {
         #[command(subcommand)]
         command: ContextCommands,
     },
+    Memory {
+        #[command(subcommand)]
+        command: MemoryCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -58,6 +63,25 @@ pub enum ContextCommands {
     Inspect { runtime_id: String },
     History { runtime_id: String },
     Snapshot { runtime_id: String },
+}
+
+#[derive(Subcommand)]
+pub enum MemoryCommands {
+    Inspect {
+        memory_id: String,
+    },
+    List {
+        mission_id: String,
+        scope: String,
+        owner_id: Option<String>,
+    },
+    History {
+        memory_id: String,
+    },
+    Promote {
+        memory_id: String,
+        target_runtime: String,
+    },
 }
 
 pub async fn run() -> Result<()> {
@@ -151,6 +175,56 @@ pub async fn run() -> Result<()> {
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&snapshot).unwrap_or_default()
+                );
+            }
+        },
+        Commands::Memory { command } => match command {
+            MemoryCommands::Inspect { memory_id } => {
+                let memory_id = memory_id.parse::<MemoryId>()?;
+                let memory = kernel
+                    .memories()
+                    .get(memory_id)
+                    .await?
+                    .ok_or(WyvernError::MemoryNotFound(memory_id))?;
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&memory).unwrap_or_default()
+                );
+            }
+            MemoryCommands::List {
+                mission_id,
+                scope,
+                owner_id,
+            } => {
+                let mission_id = mission_id.parse::<MissionId>()?;
+                let scope = scope.parse::<MemoryScope>()?;
+                let items = kernel
+                    .memories()
+                    .list_scope(mission_id, scope, owner_id.as_deref())
+                    .await?;
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&items).unwrap_or_default()
+                );
+            }
+            MemoryCommands::History { memory_id } => {
+                let memory_id = memory_id.parse::<MemoryId>()?;
+                let history = kernel.memories().history(memory_id).await?;
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&history).unwrap_or_default()
+                );
+            }
+            MemoryCommands::Promote {
+                memory_id,
+                target_runtime,
+            } => {
+                let memory_id = memory_id.parse::<MemoryId>()?;
+                let target_runtime = target_runtime.parse::<RuntimeId>()?;
+                let memory = kernel.promote_memory(memory_id, target_runtime).await?;
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&memory).unwrap_or_default()
                 );
             }
         },

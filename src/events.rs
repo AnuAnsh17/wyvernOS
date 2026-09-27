@@ -1,4 +1,4 @@
-use crate::domain::{AgentId, MissionId, RuntimeId, RuntimeState, Timestamp};
+use crate::domain::{AgentId, MemoryId, MissionId, RuntimeId, RuntimeState, Timestamp};
 use crate::error::Result;
 use crate::result::RuntimeOutcome;
 use serde::{Deserialize, Serialize};
@@ -74,6 +74,38 @@ pub enum RuntimeEvent {
         keys: Vec<String>,
         timestamp: Timestamp,
     },
+    MemoryCreated {
+        mission_id: MissionId,
+        runtime_id: RuntimeId,
+        memory_id: MemoryId,
+        timestamp: Timestamp,
+    },
+    MemorySuperseded {
+        mission_id: MissionId,
+        runtime_id: RuntimeId,
+        memory_id: MemoryId,
+        replacement_memory_id: MemoryId,
+        timestamp: Timestamp,
+    },
+    MemoryInvalidated {
+        mission_id: MissionId,
+        runtime_id: RuntimeId,
+        memory_id: MemoryId,
+        timestamp: Timestamp,
+    },
+    MemoryArchived {
+        mission_id: MissionId,
+        runtime_id: RuntimeId,
+        memory_id: MemoryId,
+        timestamp: Timestamp,
+    },
+    MemoryPromoted {
+        mission_id: MissionId,
+        runtime_id: RuntimeId,
+        memory_id: MemoryId,
+        source_memory_id: MemoryId,
+        timestamp: Timestamp,
+    },
 }
 
 impl RuntimeEvent {
@@ -86,7 +118,12 @@ impl RuntimeEvent {
             | Self::RuntimeCompleted { timestamp, .. }
             | Self::RuntimeFailed { timestamp, .. }
             | Self::RuntimeCancelled { timestamp, .. } => *timestamp,
-            Self::ContextUpdated { timestamp, .. } => *timestamp,
+            Self::ContextUpdated { timestamp, .. }
+            | Self::MemoryCreated { timestamp, .. }
+            | Self::MemorySuperseded { timestamp, .. }
+            | Self::MemoryInvalidated { timestamp, .. }
+            | Self::MemoryArchived { timestamp, .. }
+            | Self::MemoryPromoted { timestamp, .. } => *timestamp,
         }
     }
 
@@ -99,7 +136,12 @@ impl RuntimeEvent {
             | Self::RuntimeCompleted { runtime_id, .. }
             | Self::RuntimeFailed { runtime_id, .. }
             | Self::RuntimeCancelled { runtime_id, .. } => *runtime_id,
-            Self::ContextUpdated { runtime_id, .. } => *runtime_id,
+            Self::ContextUpdated { runtime_id, .. }
+            | Self::MemoryCreated { runtime_id, .. }
+            | Self::MemorySuperseded { runtime_id, .. }
+            | Self::MemoryInvalidated { runtime_id, .. }
+            | Self::MemoryArchived { runtime_id, .. }
+            | Self::MemoryPromoted { runtime_id, .. } => *runtime_id,
         }
     }
 }
@@ -262,6 +304,48 @@ impl EventBus {
             } => {
                 tracing::info!(mission_id = %mission_id, runtime_id = %runtime_id, parent_id = ?parent_id, keys = ?keys, "context.updated");
             }
+            RuntimeEvent::MemoryCreated {
+                mission_id,
+                runtime_id,
+                memory_id,
+                ..
+            } => {
+                tracing::info!(mission_id = %mission_id, runtime_id = %runtime_id, memory_id = %memory_id, "memory.created")
+            }
+            RuntimeEvent::MemorySuperseded {
+                mission_id,
+                runtime_id,
+                memory_id,
+                replacement_memory_id,
+                ..
+            } => {
+                tracing::info!(mission_id = %mission_id, runtime_id = %runtime_id, memory_id = %memory_id, replacement_memory_id = %replacement_memory_id, "memory.superseded")
+            }
+            RuntimeEvent::MemoryInvalidated {
+                mission_id,
+                runtime_id,
+                memory_id,
+                ..
+            } => {
+                tracing::info!(mission_id = %mission_id, runtime_id = %runtime_id, memory_id = %memory_id, "memory.invalidated")
+            }
+            RuntimeEvent::MemoryArchived {
+                mission_id,
+                runtime_id,
+                memory_id,
+                ..
+            } => {
+                tracing::info!(mission_id = %mission_id, runtime_id = %runtime_id, memory_id = %memory_id, "memory.archived")
+            }
+            RuntimeEvent::MemoryPromoted {
+                mission_id,
+                runtime_id,
+                memory_id,
+                source_memory_id,
+                ..
+            } => {
+                tracing::info!(mission_id = %mission_id, runtime_id = %runtime_id, memory_id = %memory_id, source_memory_id = %source_memory_id, "memory.promoted")
+            }
         }
     }
 }
@@ -277,6 +361,11 @@ impl RuntimeEvent {
             Self::RuntimeFailed { .. } => "runtime.failed",
             Self::RuntimeCancelled { .. } => "runtime.cancelled",
             Self::ContextUpdated { .. } => "context.updated",
+            Self::MemoryCreated { .. } => "memory.created",
+            Self::MemorySuperseded { .. } => "memory.superseded",
+            Self::MemoryInvalidated { .. } => "memory.invalidated",
+            Self::MemoryArchived { .. } => "memory.archived",
+            Self::MemoryPromoted { .. } => "memory.promoted",
         }
     }
 
@@ -289,7 +378,12 @@ impl RuntimeEvent {
             | Self::RuntimeCompleted { mission_id, .. }
             | Self::RuntimeFailed { mission_id, .. }
             | Self::RuntimeCancelled { mission_id, .. } => *mission_id,
-            Self::ContextUpdated { mission_id, .. } => *mission_id,
+            Self::ContextUpdated { mission_id, .. }
+            | Self::MemoryCreated { mission_id, .. }
+            | Self::MemorySuperseded { mission_id, .. }
+            | Self::MemoryInvalidated { mission_id, .. }
+            | Self::MemoryArchived { mission_id, .. }
+            | Self::MemoryPromoted { mission_id, .. } => *mission_id,
         }
     }
 
@@ -303,6 +397,11 @@ impl RuntimeEvent {
             | Self::RuntimeFailed { parent_id, .. }
             | Self::RuntimeCancelled { parent_id, .. } => *parent_id,
             Self::ContextUpdated { parent_id, .. } => *parent_id,
+            Self::MemoryCreated { .. }
+            | Self::MemorySuperseded { .. }
+            | Self::MemoryInvalidated { .. }
+            | Self::MemoryArchived { .. }
+            | Self::MemoryPromoted { .. } => None,
         }
     }
 }

@@ -14,6 +14,9 @@ pub struct MissionId(Uuid);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct AgentId(Uuid);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct MemoryId(Uuid);
+
 macro_rules! impl_id {
     ($name:ident, $prefix:literal) => {
         impl $name {
@@ -69,6 +72,7 @@ macro_rules! impl_id {
 impl_id!(RuntimeId, "rt_");
 impl_id!(MissionId, "mission_");
 impl_id!(AgentId, "agent_");
+impl_id!(MemoryId, "mem_");
 
 pub type Timestamp = i64;
 
