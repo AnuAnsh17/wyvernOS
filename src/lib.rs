@@ -2,6 +2,7 @@
 
 pub mod agent;
 pub mod cli;
+pub mod context;
 pub mod domain;
 pub mod error;
 pub mod events;
@@ -10,6 +11,10 @@ pub mod persistence;
 pub mod result;
 
 pub use agent::{AgentDefinition, AgentId, AgentKind};
+pub use context::{
+    ContextCompiler, ContextItem, ContextSnapshot, ContextStore, ContextValue, RuntimeContext,
+    StructuredChildOutput,
+};
 pub use domain::{Mission, MissionId, MissionState, RuntimeId, RuntimeState, Timestamp};
 pub use error::{Result, WyvernError};
 pub use kernel::{Kernel, Runtime, RuntimeExecutor, RuntimeHandle, RuntimeHooks, RuntimeRegistry};

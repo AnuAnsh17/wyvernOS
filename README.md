@@ -2,7 +2,7 @@
 
 Wyvern is a local-first, AI-native orchestration and control system. It is not a chatbot, a single agent, or a single model wrapper. The project is intended to become a persistent runtime layer that coordinates specialized agent runtimes, tools, external reasoning models, local applications, browsers, terminals, IDEs, filesystems, security tools, and eventually deeper operating-system capabilities.
 
-This repository now includes the implemented Stage 1 runtime kernel and Stage 1A hardening work. The current codebase provides a deterministic recursive runtime substrate with persistence, event publication, CLI inspection, and restart recovery, while later layers remain planned.
+This repository includes the Stage 1 runtime kernel, Stage 1A hardening, and the Stage 2 context and event infrastructure. Runtimes have durable branch-local context, explicit context compilation and propagation boundaries, versioned snapshots, and machine-readable event envelopes. No model or intelligent relevance layer is involved.
 
 ## Vision
 
@@ -402,8 +402,9 @@ The goal is to prove the runtime kernel.
 Stage 0 - Repository / Architecture: COMPLETED
 Stage 1 - Runtime Kernel: IMPLEMENTED
 Stage 1A - Runtime Kernel Hardening: COMPLETED
+Stage 2 - Context, State & Event Infrastructure: IMPLEMENTED
 
-The repository now captures the system's architecture and development plan. The Stage 1 runtime kernel is implemented and validated; later layers such as the context compiler, memory system, tool system, model router, and TUI remain planned.
+The Stage 1 runtime kernel and Stage 2 information-flow infrastructure are implemented and validated. Semantic memory, tools, model routing, Laya, and the TUI remain planned.
 
 ## Future Architecture Diagrams
 

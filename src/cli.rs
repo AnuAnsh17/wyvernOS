@@ -29,6 +29,10 @@ pub enum Commands {
         #[command(subcommand)]
         command: RuntimeCommands,
     },
+    Context {
+        #[command(subcommand)]
+        command: ContextCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -47,6 +51,13 @@ pub enum MissionCommands {
 pub enum RuntimeCommands {
     List,
     Inspect { runtime_id: String },
+}
+
+#[derive(Subcommand)]
+pub enum ContextCommands {
+    Inspect { runtime_id: String },
+    History { runtime_id: String },
+    Snapshot { runtime_id: String },
 }
 
 pub async fn run() -> Result<()> {
@@ -114,6 +125,32 @@ pub async fn run() -> Result<()> {
                     "{}",
                     serde_json::to_string_pretty(&runtime)
                         .unwrap_or_else(|_| format!("rt_{}", runtime.runtime_id))
+                );
+            }
+        },
+        Commands::Context { command } => match command {
+            ContextCommands::Inspect { runtime_id } => {
+                let runtime_id = runtime_id.parse::<RuntimeId>()?;
+                let context = kernel.context(runtime_id).await?;
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&context).unwrap_or_default()
+                );
+            }
+            ContextCommands::History { runtime_id } => {
+                let runtime_id = runtime_id.parse::<RuntimeId>()?;
+                let snapshots = kernel.contexts().snapshot_history(runtime_id).await?;
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&snapshots).unwrap_or_default()
+                );
+            }
+            ContextCommands::Snapshot { runtime_id } => {
+                let runtime_id = runtime_id.parse::<RuntimeId>()?;
+                let snapshot = kernel.contexts().create_snapshot(runtime_id, None).await?;
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&snapshot).unwrap_or_default()
                 );
             }
         },

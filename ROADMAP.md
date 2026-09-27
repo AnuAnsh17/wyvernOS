@@ -57,33 +57,32 @@ Goals:
 - restart recovery checks
 - CLI inspection and recursive demo checks
 
-## Stage 2 - Event System
+## Stage 2 - Context, State & Event Infrastructure
+
+Status: Implemented
+
+Goals:
+
+- typed branch-local runtime context
+- deterministic context compiler boundary
+- explicit downward context inheritance and upward child-result propagation
+- context provenance and immutable versioned SQLite snapshots
+- machine-readable event envelopes and context update notifications
+- live event bus retained separately from durable context state
+
+## Stage 3 - Scoped Memory
 
 Status: Planned
 
 Goals:
 
-- event bus
-- event definitions
-- subscriptions
-- runtime events
-- live event stream
-- persistence / audit trail
-
-## Stage 3 - Context + Memory
-
-Status: Planned
-
-Goals:
-
-- context compiler
 - scoped memory
 - mission state
 - branch state
-- runtime state
 - artifact references
 - relevance filtering
 - provenance
+- durable structured memory beyond active runtime context
 
 ## Stage 4 - Tool System
 

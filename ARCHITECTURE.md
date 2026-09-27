@@ -236,3 +236,12 @@ Current implementation choices:
 - cancellation-aware execution and lifecycle validation
 - a deterministic demo executor that proves recursive asynchronous execution without LLM involvement
 - agent definitions stored separately from runtime instances, with execution behavior still fixed by the stage-1 demo recipe rather than model reasoning
+
+## Stage 2 Implementation Notes
+
+- `Runtime` remains the machine execution/lifecycle record; `RuntimeContext` is a separate typed projection with inherited items, local facts, relevant event envelopes, selected child outputs, constraints, and metadata.
+- `ContextCompiler::compile` is deterministic and side-effect-free. Callers select all inherited context, events, and child outputs explicitly.
+- Context is stored by runtime ID, scoped to its mission, and written to SQLite alongside immutable versioned snapshots. Context updates are serialized per runtime; separate runtime branches can update independently.
+- Child context starts empty. Downward inheritance copies selected parent facts, and upward result propagation writes only to the direct parent when explicitly requested.
+- `EventBus` remains a live broadcast mechanism. A second subscription surface delivers envelopes with event IDs and routing fields while the original event subscription remains compatible.
+- Persistent event history is not implemented; event envelopes are live notifications, while context and snapshots are durable records.

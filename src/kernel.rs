@@ -1,4 +1,8 @@
 use crate::agent::{AgentDefinition, AgentKind};
+use crate::context::{
+    ContextItem, ContextProvenance, ContextSourceType, ContextStore, RuntimeContext,
+    RuntimeStateView, StructuredChildOutput,
+};
 use crate::domain::{now_millis, Mission, MissionId, MissionState, RuntimeId, RuntimeState};
 use crate::error::{Result, WyvernError};
 use crate::events::{EventBus, RuntimeEvent};
@@ -200,11 +204,20 @@ struct KernelInner {
     pub runtimes: RuntimeRegistry,
     pub events: EventBus,
     pub store: Arc<dyn RuntimeStore>,
+    pub context_store: ContextStore,
     pub controls: RwLock<HashMap<RuntimeId, watch::Sender<bool>>>,
 }
 
 impl Kernel {
     pub async fn new(store: Arc<dyn RuntimeStore>) -> Result<Self> {
+        let context_store = ContextStore::in_memory().await?;
+        Self::new_with_context_store(store, context_store).await
+    }
+
+    async fn new_with_context_store(
+        store: Arc<dyn RuntimeStore>,
+        context_store: ContextStore,
+    ) -> Result<Self> {
         let kernel = Self {
             inner: Arc::new(KernelInner {
                 agents: AgentRegistry::default(),
@@ -212,6 +225,7 @@ impl Kernel {
                 runtimes: RuntimeRegistry::default(),
                 events: EventBus::new(1024),
                 store,
+                context_store,
                 controls: RwLock::new(HashMap::new()),
             }),
         };
@@ -220,8 +234,159 @@ impl Kernel {
     }
 
     pub async fn new_sqlite(path: impl AsRef<Path>) -> Result<Self> {
-        let store = SqliteRuntimeStore::open(path).await?;
-        Self::new(Arc::new(store)).await
+        let store = SqliteRuntimeStore::open(&path).await?;
+        let context_store = ContextStore::open(&path).await?;
+        Self::new_with_context_store(Arc::new(store), context_store).await
+    }
+
+    pub fn contexts(&self) -> ContextStore {
+        self.inner.context_store.clone()
+    }
+
+    pub async fn add_context_fact(
+        &self,
+        runtime_id: RuntimeId,
+        key: impl Into<String>,
+        value: crate::context::ContextValue,
+    ) -> Result<RuntimeContext> {
+        let runtime = self.get_runtime(runtime_id).await?;
+        let key = key.into();
+        let item = ContextItem {
+            key: key.clone(),
+            value,
+            provenance: ContextProvenance {
+                source_type: ContextSourceType::LocalContext,
+                source_runtime_id: Some(runtime_id),
+                source_event_id: None,
+                created_at: crate::domain::now_millis(),
+            },
+            priority: None,
+        };
+        let context = self
+            .inner
+            .context_store
+            .update(runtime_id, |context| context.local_facts.push(item.clone()))
+            .await?;
+        self.publish(RuntimeEvent::ContextUpdated {
+            mission_id: runtime.mission_id,
+            runtime_id,
+            parent_id: runtime.parent_id,
+            keys: vec![key],
+            timestamp: crate::domain::now_millis(),
+        })?;
+        Ok(context)
+    }
+
+    pub async fn context(&self, runtime_id: RuntimeId) -> Result<RuntimeContext> {
+        self.inner
+            .context_store
+            .get(runtime_id)
+            .await?
+            .ok_or(WyvernError::RuntimeNotFound(runtime_id))
+    }
+
+    /// Replaces only this runtime's context with a deterministic projection.
+    pub async fn compile_context(
+        &self,
+        runtime_id: RuntimeId,
+        inherited_context: Vec<ContextItem>,
+        relevant_events: Vec<crate::events::EventEnvelope>,
+        child_outputs: Vec<StructuredChildOutput>,
+        constraints: Vec<String>,
+    ) -> Result<RuntimeContext> {
+        let runtime = self.get_runtime(runtime_id).await?;
+        let context =
+            crate::context::ContextCompiler::compile(crate::context::ContextCompileInput {
+                runtime: Some(RuntimeStateView {
+                    runtime_id,
+                    mission_id: runtime.mission_id,
+                    agent_id: runtime.agent_id,
+                    parent_id: runtime.parent_id,
+                    lifecycle_state: runtime.state,
+                    objective: runtime.objective.clone(),
+                    created_at: runtime.created_at,
+                    updated_at: runtime.updated_at,
+                    result: runtime.result.clone(),
+                }),
+                objective: runtime.objective,
+                inherited_context,
+                local_facts: self.context(runtime_id).await?.local_facts,
+                relevant_events,
+                child_outputs,
+                constraints,
+                metadata: Vec::new(),
+            });
+        self.inner
+            .context_store
+            .update(runtime_id, |current| *current = context.clone())
+            .await?;
+        Ok(context)
+    }
+
+    /// Explicit upward propagation. Child output is stored in its immediate parent's context only.
+    pub async fn propagate_child_result(
+        &self,
+        parent_id: RuntimeId,
+        result: &RuntimeResult,
+        result_type: impl Into<String>,
+    ) -> Result<RuntimeContext> {
+        let parent = self.get_runtime(parent_id).await?;
+        let child = self.get_runtime(result.runtime_id).await?;
+        if child.parent_id != Some(parent_id) || child.mission_id != parent.mission_id {
+            return Err(WyvernError::ExecutionError(
+                "child result does not belong to this parent and mission".into(),
+            ));
+        }
+        let output = StructuredChildOutput::from_result(parent.mission_id, result, result_type);
+        let context = self
+            .inner
+            .context_store
+            .update(parent_id, |context| {
+                context.child_outputs.push(output.clone())
+            })
+            .await?;
+        self.publish(RuntimeEvent::ContextUpdated {
+            mission_id: parent.mission_id,
+            runtime_id: parent_id,
+            parent_id: parent.parent_id,
+            keys: vec![format!("child:{}", result.runtime_id)],
+            timestamp: crate::domain::now_millis(),
+        })?;
+        Ok(context)
+    }
+
+    /// Explicit downward propagation using a copied selection of parent facts.
+    pub async fn inherit_context(
+        &self,
+        parent_id: RuntimeId,
+        child_id: RuntimeId,
+        keys: &[String],
+    ) -> Result<RuntimeContext> {
+        let parent = self.get_runtime(parent_id).await?;
+        let child = self.get_runtime(child_id).await?;
+        if child.parent_id != Some(parent_id) || child.mission_id != parent.mission_id {
+            return Err(WyvernError::ExecutionError(
+                "context inheritance requires a direct child in the same mission".into(),
+            ));
+        }
+        let selected = self
+            .context(parent_id)
+            .await?
+            .local_facts
+            .into_iter()
+            .filter(|item| keys.contains(&item.key))
+            .map(|mut item| {
+                item.provenance = ContextProvenance {
+                    source_type: ContextSourceType::ParentContext,
+                    source_runtime_id: Some(parent_id),
+                    source_event_id: None,
+                    created_at: crate::domain::now_millis(),
+                };
+                item
+            })
+            .collect();
+        self.compile_context(child_id, selected, Vec::new(), Vec::new(), Vec::new())
+            .await
     }
 
     pub fn events(&self) -> EventBus {
@@ -239,6 +404,28 @@ impl Kernel {
         }
 
         for runtime in loaded_runtimes {
+            self.inner
+                .context_store
+                .create(
+                    runtime.id,
+                    runtime.mission_id,
+                    RuntimeContext {
+                        objective: runtime.objective.clone(),
+                        runtime: Some(RuntimeStateView {
+                            runtime_id: runtime.id,
+                            mission_id: runtime.mission_id,
+                            agent_id: runtime.agent_id,
+                            parent_id: runtime.parent_id,
+                            lifecycle_state: runtime.state,
+                            objective: runtime.objective.clone(),
+                            created_at: runtime.created_at,
+                            updated_at: runtime.updated_at,
+                            result: runtime.result.clone(),
+                        }),
+                        ..RuntimeContext::default()
+                    },
+                )
+                .await?;
             self.inner.runtimes.insert(runtime).await;
         }
 
@@ -368,6 +555,28 @@ impl Kernel {
 
         let runtime = Runtime::new(mission_id, agent.id, parent_id, objective);
         self.inner.store.upsert_runtime(&runtime, agent).await?;
+        self.inner
+            .context_store
+            .create(
+                runtime.id,
+                mission_id,
+                RuntimeContext {
+                    objective: runtime.objective.clone(),
+                    runtime: Some(RuntimeStateView {
+                        runtime_id: runtime.id,
+                        mission_id,
+                        agent_id: runtime.agent_id,
+                        parent_id,
+                        lifecycle_state: runtime.state,
+                        objective: runtime.objective.clone(),
+                        created_at: runtime.created_at,
+                        updated_at: runtime.updated_at,
+                        result: None,
+                    }),
+                    ..RuntimeContext::default()
+                },
+            )
+            .await?;
         self.inner.runtimes.insert(runtime.clone()).await;
         self.inner
             .controls
