@@ -130,6 +130,14 @@ Initial tools are expected to include:
 
 Later tools will add browser, tabs, IDE control, application control, screenshots, security tooling, HTTP, and OS APIs.
 
+### Stage 4 Capability Boundary
+
+The Stage 4 capability module separates a capability (an allowed interaction boundary) from its concrete tools (operations exposed by that boundary). Typed descriptors identify the capability and each tool, including version, provider, schemas, and risk level. `CapabilityRegistry` owns registered executors and supports listing, lookup, tool resolution, registration, and removal without a global singleton.
+
+A runtime submits a `CapabilityRequest` with mission/runtime identity, capability and tool IDs, input, timeout, and metadata. `Kernel::execute_capability` verifies that the runtime belongs to the stated mission before dispatch. A matching `CapabilityPermission` must grant the capability, tool, and mission or runtime scope. The executor receives the complete request identity; the registry enforces timeout/cancellation and emits request, start, and terminal lifecycle events through the existing EventBus/EventEnvelope.
+
+Results are returned as typed `CapabilityResult` values. They are not added to runtime context or memory automatically: callers explicitly select results for context compilation or convert a successful result to a `MemoryDraft`. The in-process `mock.echo` executor demonstrates this flow for tests. No browser, filesystem, process, network, model, or OS execution implementation is registered by default.
+
 ### System Adapters
 
 OS-specific behavior belongs behind adapters.

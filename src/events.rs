@@ -1,4 +1,7 @@
-use crate::domain::{AgentId, MemoryId, MissionId, RuntimeId, RuntimeState, Timestamp};
+use crate::domain::{
+    AgentId, CapabilityId, CapabilityRequestId, MemoryId, MissionId, RuntimeId, RuntimeState,
+    Timestamp, ToolId,
+};
 use crate::error::Result;
 use crate::result::RuntimeOutcome;
 use serde::{Deserialize, Serialize};
@@ -106,6 +109,63 @@ pub enum RuntimeEvent {
         source_memory_id: MemoryId,
         timestamp: Timestamp,
     },
+    CapabilityRequested {
+        mission_id: MissionId,
+        runtime_id: RuntimeId,
+        parent_id: Option<RuntimeId>,
+        request_id: CapabilityRequestId,
+        capability_id: CapabilityId,
+        tool_id: ToolId,
+        timestamp: Timestamp,
+    },
+    CapabilityStarted {
+        mission_id: MissionId,
+        runtime_id: RuntimeId,
+        parent_id: Option<RuntimeId>,
+        request_id: CapabilityRequestId,
+        capability_id: CapabilityId,
+        tool_id: ToolId,
+        timestamp: Timestamp,
+    },
+    CapabilitySucceeded {
+        mission_id: MissionId,
+        runtime_id: RuntimeId,
+        parent_id: Option<RuntimeId>,
+        request_id: CapabilityRequestId,
+        capability_id: CapabilityId,
+        tool_id: ToolId,
+        timestamp: Timestamp,
+    },
+    CapabilityFailed {
+        mission_id: MissionId,
+        runtime_id: RuntimeId,
+        parent_id: Option<RuntimeId>,
+        request_id: CapabilityRequestId,
+        capability_id: CapabilityId,
+        tool_id: ToolId,
+        error: String,
+        timestamp: Timestamp,
+    },
+    CapabilityCancelled {
+        mission_id: MissionId,
+        runtime_id: RuntimeId,
+        parent_id: Option<RuntimeId>,
+        request_id: CapabilityRequestId,
+        capability_id: CapabilityId,
+        tool_id: ToolId,
+        timed_out: bool,
+        timestamp: Timestamp,
+    },
+    CapabilityRejected {
+        mission_id: MissionId,
+        runtime_id: RuntimeId,
+        parent_id: Option<RuntimeId>,
+        request_id: CapabilityRequestId,
+        capability_id: CapabilityId,
+        tool_id: ToolId,
+        error: String,
+        timestamp: Timestamp,
+    },
 }
 
 impl RuntimeEvent {
@@ -124,6 +184,12 @@ impl RuntimeEvent {
             | Self::MemoryInvalidated { timestamp, .. }
             | Self::MemoryArchived { timestamp, .. }
             | Self::MemoryPromoted { timestamp, .. } => *timestamp,
+            Self::CapabilityRequested { timestamp, .. }
+            | Self::CapabilityStarted { timestamp, .. }
+            | Self::CapabilitySucceeded { timestamp, .. }
+            | Self::CapabilityFailed { timestamp, .. }
+            | Self::CapabilityCancelled { timestamp, .. }
+            | Self::CapabilityRejected { timestamp, .. } => *timestamp,
         }
     }
 
@@ -142,6 +208,12 @@ impl RuntimeEvent {
             | Self::MemoryInvalidated { runtime_id, .. }
             | Self::MemoryArchived { runtime_id, .. }
             | Self::MemoryPromoted { runtime_id, .. } => *runtime_id,
+            Self::CapabilityRequested { runtime_id, .. }
+            | Self::CapabilityStarted { runtime_id, .. }
+            | Self::CapabilitySucceeded { runtime_id, .. }
+            | Self::CapabilityFailed { runtime_id, .. }
+            | Self::CapabilityCancelled { runtime_id, .. }
+            | Self::CapabilityRejected { runtime_id, .. } => *runtime_id,
         }
     }
 }
@@ -346,6 +418,69 @@ impl EventBus {
             } => {
                 tracing::info!(mission_id = %mission_id, runtime_id = %runtime_id, memory_id = %memory_id, source_memory_id = %source_memory_id, "memory.promoted")
             }
+            RuntimeEvent::CapabilityRequested {
+                mission_id,
+                runtime_id,
+                request_id,
+                capability_id,
+                tool_id,
+                ..
+            } => {
+                tracing::info!(mission_id = %mission_id, runtime_id = %runtime_id, request_id = %request_id, capability_id = %capability_id, tool_id = %tool_id, "capability.requested")
+            }
+            RuntimeEvent::CapabilityStarted {
+                mission_id,
+                runtime_id,
+                request_id,
+                capability_id,
+                tool_id,
+                ..
+            } => {
+                tracing::info!(mission_id = %mission_id, runtime_id = %runtime_id, request_id = %request_id, capability_id = %capability_id, tool_id = %tool_id, "capability.started")
+            }
+            RuntimeEvent::CapabilitySucceeded {
+                mission_id,
+                runtime_id,
+                request_id,
+                capability_id,
+                tool_id,
+                ..
+            } => {
+                tracing::info!(mission_id = %mission_id, runtime_id = %runtime_id, request_id = %request_id, capability_id = %capability_id, tool_id = %tool_id, "capability.succeeded")
+            }
+            RuntimeEvent::CapabilityFailed {
+                mission_id,
+                runtime_id,
+                request_id,
+                capability_id,
+                tool_id,
+                error,
+                ..
+            } => {
+                tracing::warn!(mission_id = %mission_id, runtime_id = %runtime_id, request_id = %request_id, capability_id = %capability_id, tool_id = %tool_id, error = %error, "capability.failed")
+            }
+            RuntimeEvent::CapabilityCancelled {
+                mission_id,
+                runtime_id,
+                request_id,
+                capability_id,
+                tool_id,
+                timed_out,
+                ..
+            } => {
+                tracing::warn!(mission_id = %mission_id, runtime_id = %runtime_id, request_id = %request_id, capability_id = %capability_id, tool_id = %tool_id, timed_out = *timed_out, "capability.cancelled")
+            }
+            RuntimeEvent::CapabilityRejected {
+                mission_id,
+                runtime_id,
+                request_id,
+                capability_id,
+                tool_id,
+                error,
+                ..
+            } => {
+                tracing::warn!(mission_id = %mission_id, runtime_id = %runtime_id, request_id = %request_id, capability_id = %capability_id, tool_id = %tool_id, error = %error, "capability.rejected")
+            }
         }
     }
 }
@@ -366,6 +501,12 @@ impl RuntimeEvent {
             Self::MemoryInvalidated { .. } => "memory.invalidated",
             Self::MemoryArchived { .. } => "memory.archived",
             Self::MemoryPromoted { .. } => "memory.promoted",
+            Self::CapabilityRequested { .. } => "capability.requested",
+            Self::CapabilityStarted { .. } => "capability.started",
+            Self::CapabilitySucceeded { .. } => "capability.succeeded",
+            Self::CapabilityFailed { .. } => "capability.failed",
+            Self::CapabilityCancelled { .. } => "capability.cancelled",
+            Self::CapabilityRejected { .. } => "capability.rejected",
         }
     }
 
@@ -384,6 +525,12 @@ impl RuntimeEvent {
             | Self::MemoryInvalidated { mission_id, .. }
             | Self::MemoryArchived { mission_id, .. }
             | Self::MemoryPromoted { mission_id, .. } => *mission_id,
+            Self::CapabilityRequested { mission_id, .. }
+            | Self::CapabilityStarted { mission_id, .. }
+            | Self::CapabilitySucceeded { mission_id, .. }
+            | Self::CapabilityFailed { mission_id, .. }
+            | Self::CapabilityCancelled { mission_id, .. }
+            | Self::CapabilityRejected { mission_id, .. } => *mission_id,
         }
     }
 
@@ -396,6 +543,12 @@ impl RuntimeEvent {
             | Self::RuntimeCompleted { parent_id, .. }
             | Self::RuntimeFailed { parent_id, .. }
             | Self::RuntimeCancelled { parent_id, .. } => *parent_id,
+            Self::CapabilityRequested { parent_id, .. }
+            | Self::CapabilityStarted { parent_id, .. }
+            | Self::CapabilitySucceeded { parent_id, .. }
+            | Self::CapabilityFailed { parent_id, .. }
+            | Self::CapabilityCancelled { parent_id, .. }
+            | Self::CapabilityRejected { parent_id, .. } => *parent_id,
             Self::ContextUpdated { parent_id, .. } => *parent_id,
             Self::MemoryCreated { .. }
             | Self::MemorySuperseded { .. }

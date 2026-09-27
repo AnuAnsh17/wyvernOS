@@ -1,5 +1,6 @@
 //! Branch-local runtime context, deterministic compilation, and durable snapshots.
 
+use crate::capability::CapabilityResult;
 use crate::domain::{now_millis, MissionId, RuntimeId, RuntimeState, Timestamp};
 use crate::error::{Result, WyvernError};
 use crate::events::EventEnvelope;
@@ -74,6 +75,8 @@ pub struct RuntimeContext {
     pub child_outputs: Vec<StructuredChildOutput>,
     #[serde(default)]
     pub selected_memories: Vec<MemoryItem>,
+    #[serde(default)]
+    pub capability_results: Vec<CapabilityResult>,
     pub constraints: Vec<String>,
     pub metadata: Vec<ContextItem>,
 }
@@ -126,6 +129,7 @@ pub struct ContextCompileInput {
     pub relevant_events: Vec<EventEnvelope>,
     pub child_outputs: Vec<StructuredChildOutput>,
     pub selected_memories: Vec<MemoryItem>,
+    pub capability_results: Vec<CapabilityResult>,
     pub constraints: Vec<String>,
     pub metadata: Vec<ContextItem>,
 }
@@ -142,6 +146,7 @@ impl ContextCompiler {
             relevant_events: input.relevant_events,
             child_outputs: input.child_outputs,
             selected_memories: input.selected_memories,
+            capability_results: input.capability_results,
             constraints: input.constraints,
             metadata: input.metadata,
         }

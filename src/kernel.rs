@@ -1,4 +1,8 @@
 use crate::agent::{AgentDefinition, AgentKind};
+use crate::capability::{
+    CapabilityCancellation, CapabilityPermission, CapabilityRegistry, CapabilityRequest,
+    CapabilityResult,
+};
 use crate::context::{
     ContextItem, ContextProvenance, ContextSourceType, ContextStore, RuntimeContext,
     RuntimeStateView, StructuredChildOutput,
@@ -204,6 +208,7 @@ struct KernelInner {
     pub missions: MissionRegistry,
     pub runtimes: RuntimeRegistry,
     pub events: EventBus,
+    pub capabilities: CapabilityRegistry,
     pub store: Arc<dyn RuntimeStore>,
     pub context_store: ContextStore,
     pub memory_store: MemoryStore,
@@ -224,12 +229,14 @@ impl Kernel {
         memory_store: MemoryStore,
         events: EventBus,
     ) -> Result<Self> {
+        let capabilities = CapabilityRegistry::new(events.clone());
         let kernel = Self {
             inner: Arc::new(KernelInner {
                 agents: AgentRegistry::default(),
                 missions: MissionRegistry::default(),
                 runtimes: RuntimeRegistry::default(),
                 events,
+                capabilities,
                 store,
                 context_store,
                 memory_store,
@@ -254,6 +261,31 @@ impl Kernel {
 
     pub fn memories(&self) -> MemoryStore {
         self.inner.memory_store.clone()
+    }
+
+    pub fn capabilities(&self) -> CapabilityRegistry {
+        self.inner.capabilities.clone()
+    }
+
+    /// Dispatches a request only after confirming its runtime/mission association.
+    pub async fn execute_capability(
+        &self,
+        mut request: CapabilityRequest,
+        permission: &CapabilityPermission,
+        cancellation: &CapabilityCancellation,
+    ) -> Result<CapabilityResult> {
+        let runtime = self.get_runtime(request.runtime_id).await?;
+        if runtime.mission_id != request.mission_id {
+            return Err(WyvernError::ExecutionError(
+                "capability request mission does not match its runtime".into(),
+            ));
+        }
+        request.parent_runtime_id = runtime.parent_id;
+        Ok(self
+            .inner
+            .capabilities
+            .execute(request, permission, cancellation)
+            .await)
     }
 
     pub async fn create_memory(&self, draft: MemoryDraft) -> Result<MemoryItem> {
@@ -423,6 +455,29 @@ impl Kernel {
         constraints: Vec<String>,
         selected_memories: Vec<MemoryItem>,
     ) -> Result<RuntimeContext> {
+        self.compile_context_with_capability_results(
+            runtime_id,
+            inherited_context,
+            relevant_events,
+            child_outputs,
+            constraints,
+            selected_memories,
+            Vec::new(),
+        )
+        .await
+    }
+
+    /// Compiles only the capability results explicitly selected by the caller.
+    pub async fn compile_context_with_capability_results(
+        &self,
+        runtime_id: RuntimeId,
+        inherited_context: Vec<ContextItem>,
+        relevant_events: Vec<crate::events::EventEnvelope>,
+        child_outputs: Vec<StructuredChildOutput>,
+        constraints: Vec<String>,
+        selected_memories: Vec<MemoryItem>,
+        capability_results: Vec<CapabilityResult>,
+    ) -> Result<RuntimeContext> {
         let runtime = self.get_runtime(runtime_id).await?;
         let context =
             crate::context::ContextCompiler::compile(crate::context::ContextCompileInput {
@@ -443,6 +498,7 @@ impl Kernel {
                 relevant_events,
                 child_outputs,
                 selected_memories,
+                capability_results,
                 constraints,
                 metadata: Vec::new(),
             });

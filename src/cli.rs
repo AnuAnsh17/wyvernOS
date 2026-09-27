@@ -1,4 +1,5 @@
-use crate::domain::{MemoryId, MissionId, RuntimeId};
+use crate::capability::mock_echo_definition;
+use crate::domain::{CapabilityId, MemoryId, MissionId, RuntimeId, ToolId};
 use crate::error::{Result, WyvernError};
 use crate::kernel::Kernel;
 use crate::memory::MemoryScope;
@@ -37,6 +38,14 @@ pub enum Commands {
     Memory {
         #[command(subcommand)]
         command: MemoryCommands,
+    },
+    Capability {
+        #[command(subcommand)]
+        command: CapabilityCommands,
+    },
+    Tool {
+        #[command(subcommand)]
+        command: ToolCommands,
     },
 }
 
@@ -84,9 +93,28 @@ pub enum MemoryCommands {
     },
 }
 
+#[derive(Subcommand)]
+pub enum CapabilityCommands {
+    List,
+    Inspect { capability: String },
+}
+
+#[derive(Subcommand)]
+pub enum ToolCommands {
+    List,
+    Inspect { tool: String },
+}
+
 pub async fn run() -> Result<()> {
     let cli = Cli::parse();
     let kernel = Kernel::new_sqlite(&cli.database).await?;
+    // Expose the inert in-process mock through CLI inspection as a Stage 4 demo.
+    let (descriptor, tool, executor) = mock_echo_definition();
+    kernel
+        .capabilities()
+        .register(descriptor, vec![tool], executor)
+        .await
+        .map_err(|error| WyvernError::ExecutionError(error.to_string()))?;
 
     match cli.command {
         Commands::Demo {
@@ -226,6 +254,69 @@ pub async fn run() -> Result<()> {
                     "{}",
                     serde_json::to_string_pretty(&memory).unwrap_or_default()
                 );
+            }
+        },
+        Commands::Capability { command } => match command {
+            CapabilityCommands::List => {
+                let capabilities = kernel.capabilities().list().await;
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&capabilities).unwrap_or_default()
+                );
+            }
+            CapabilityCommands::Inspect { capability } => {
+                let registry = kernel.capabilities();
+                let descriptor = match capability.parse::<CapabilityId>() {
+                    Ok(id) => registry.get(id).await,
+                    Err(_) => registry
+                        .list()
+                        .await
+                        .into_iter()
+                        .find(|item| item.name == capability),
+                }
+                .ok_or_else(|| WyvernError::Cli(format!("capability not found: {capability}")))?;
+                let tools: Vec<_> = registry
+                    .list_tools()
+                    .await
+                    .into_iter()
+                    .filter(|tool| tool.capability_id == descriptor.id)
+                    .collect();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&(descriptor, tools)).unwrap_or_default()
+                );
+            }
+        },
+        Commands::Tool { command } => match command {
+            ToolCommands::List => {
+                let tools = kernel.capabilities().list_tools().await;
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&tools).unwrap_or_default()
+                );
+            }
+            ToolCommands::Inspect { tool } => {
+                let registry = kernel.capabilities();
+                let found = if let Ok(id) = tool.parse::<ToolId>() {
+                    registry.resolve_tool(id).await.ok()
+                } else if let Some(descriptor) = registry
+                    .list_tools()
+                    .await
+                    .into_iter()
+                    .find(|item| item.name == tool)
+                {
+                    registry.resolve_tool(descriptor.id).await.ok()
+                } else {
+                    None
+                };
+                if let Some((capability, descriptor)) = found {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&(capability, descriptor)).unwrap_or_default()
+                    );
+                } else {
+                    return Err(WyvernError::Cli(format!("tool not found: {tool}")));
+                }
             }
         },
     }

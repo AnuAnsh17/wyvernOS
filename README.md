@@ -4,6 +4,8 @@ Wyvern is a local-first, AI-native orchestration and control system. It is not a
 
 This repository includes the Stage 1 runtime kernel, Stage 1A hardening, and the Stage 2 context and event infrastructure. Runtimes have durable branch-local context, explicit context compilation and propagation boundaries, versioned snapshots, and machine-readable event envelopes. No model or intelligent relevance layer is involved.
 
+The capability layer defines typed capability and tool descriptors, scoped permissions, request/result lifecycles, and an auditable executor boundary. `mock.echo` is an in-process test capability; no operating-system or browser automation is implemented. Capability results enter context or scoped memory only through explicit caller selection.
+
 ## Vision
 
 Wyvern aims to become a command-and-control layer for software work and system work on a local machine. The long-term goal is a deterministic orchestration kernel that can manage many logical runtimes concurrently while routing reasoning, tool use, and external agent delegation through explicit abstractions.
