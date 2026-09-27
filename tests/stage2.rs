@@ -248,7 +248,7 @@ async fn concurrent_updates_are_not_lost_and_snapshots_are_immutable() {
 
 #[tokio::test]
 async fn context_and_snapshots_survive_reopen_and_events_have_envelopes() {
-    let (kernel, dir, db) = kernel().await;
+    let (kernel, _dir, db) = kernel().await;
     let receiver = kernel.events().subscribe_envelopes();
     let mission = kernel.create_mission("persist").await.unwrap();
     let agent = kernel
@@ -287,7 +287,6 @@ async fn context_and_snapshots_survive_reopen_and_events_have_envelopes() {
     assert_eq!(context_event.event_type, context_event.payload.event_type());
 
     drop(kernel);
-    drop(dir);
     let reopened = Kernel::new_sqlite(&db).await.unwrap();
     let context = reopened.context(runtime.id()).await.unwrap();
     assert_eq!(context.local_facts[0].key, "durable");
