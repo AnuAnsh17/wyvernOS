@@ -221,3 +221,16 @@ The initial architecture does not include:
 - distributed infrastructure
 - direct unrestricted machine control
 - broad app-specific integrations before the abstraction layer exists
+
+## Stage 1 Implementation Notes
+
+The initial kernel is intentionally small and deterministic.
+
+Current implementation choices:
+
+- strongly typed numeric IDs with human-readable prefixes for CLI output
+- in-memory runtime and mission registries for active state
+- SQLite persistence as the durable source of record
+- broadcast-based event distribution for runtime lifecycle notifications
+- a deterministic demo executor that proves recursive asynchronous execution without LLM involvement
+- agent definitions stored separately from runtime instances, with execution behavior still fixed by the stage-1 demo recipe rather than model reasoning

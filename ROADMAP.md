@@ -10,7 +10,7 @@ This roadmap tracks the staged development plan for Wyvern.
 
 ## Stage 0 - Repository / Architecture
 
-Status: In Progress
+Status: Completed
 
 Goals:
 
@@ -22,7 +22,7 @@ Goals:
 
 ## Stage 1 - Runtime Kernel
 
-Status: Planned
+Status: In Progress
 
 Goals:
 

@@ -286,17 +286,28 @@ Do not add abstractions just because the system might scale in theory. Build the
 
 ## Stage Roadmap
 
-This repository is currently in Stage 0.
+Stage 0 is complete. Stage 1 is now in progress and the runtime kernel has been implemented and validated.
 
 ### Stage 0 - Repository / Architecture
 
-Status: planned and in progress for this repository bootstrap.
+Status: completed.
 
 Create repository structure, documentation, architecture diagrams, contracts, design decisions, and development rules. No runtime implementation yet.
 
 ### Stage 1 - Runtime Kernel
 
-Implement the runtime structure, agent definition, runtime lifecycle, parent/child hierarchy, async execution, basic scheduler, and basic state persistence.
+Status: in progress.
+
+Implemented so far:
+
+- typed runtime, mission, and agent identities
+- runtime lifecycle state machine
+- runtime registry and parent/child hierarchy
+- asynchronous recursive execution
+- deterministic demo executor
+- event emission for runtime lifecycle transitions
+- SQLite persistence for missions, runtimes, and results
+- minimal CLI for demo, mission, and runtime inspection
 
 ### Stage 2 - Event System
 
