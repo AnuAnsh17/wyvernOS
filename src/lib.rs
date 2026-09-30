@@ -25,10 +25,10 @@ pub use context::{
     StructuredChildOutput,
 };
 pub use decision::{
-    DecisionConstraint, DecisionConstraintKind, DecisionContext, DecisionContextFact,
-    DecisionEngine, DecisionEngineProvenance, DecisionError, DecisionMemory, DecisionOption,
-    DecisionOptionId, DecisionRequest, DecisionResult, DecisionRuntimeState, DecisionType,
-    MockDecisionEngine,
+    AppliedDecision, DecisionApplication, DecisionConstraint, DecisionConstraintKind,
+    DecisionContext, DecisionContextFact, DecisionEngine, DecisionEngineProvenance, DecisionError,
+    DecisionMemory, DecisionOption, DecisionOptionId, DecisionRequest, DecisionResult,
+    DecisionRuntimeState, DecisionType, MockDecisionEngine,
 };
 pub use domain::{
     CapabilityId, CapabilityRequestId, DecisionRequestId, MemoryId, Mission, MissionId,

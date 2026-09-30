@@ -8,8 +8,8 @@ use crate::context::{
     RuntimeStateView, StructuredChildOutput,
 };
 use crate::decision::{
-    DecisionConstraint, DecisionContext, DecisionEngine, DecisionRequest, DecisionResult,
-    DecisionType,
+    AppliedDecision, DecisionApplication, DecisionConstraint, DecisionContext, DecisionEngine,
+    DecisionError, DecisionOption, DecisionRequest, DecisionResult, DecisionType,
 };
 use crate::domain::{now_millis, Mission, MissionId, MissionState, RuntimeId, RuntimeState};
 use crate::error::{Result, WyvernError};
@@ -23,7 +23,7 @@ use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
-use tokio::sync::{watch, Barrier, Notify, RwLock};
+use tokio::sync::{watch, Barrier, Mutex, Notify, RwLock};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Runtime {
@@ -69,13 +69,13 @@ impl Runtime {
             });
         }
         self.state = next;
-        self.updated_at = now_millis();
+        self.updated_at = now_millis().max(self.updated_at.saturating_add(1));
         Ok(())
     }
 
     pub fn set_result(&mut self, result: RuntimeResult) {
         self.result = Some(result);
-        self.updated_at = now_millis();
+        self.updated_at = now_millis().max(self.updated_at.saturating_add(1));
     }
 }
 
@@ -146,7 +146,7 @@ impl RuntimeRegistry {
         };
         if !parent.children.contains(&child_id) {
             parent.children.push(child_id);
-            parent.updated_at = now_millis();
+            parent.updated_at = now_millis().max(parent.updated_at.saturating_add(1));
         }
         Ok(())
     }
@@ -218,6 +218,7 @@ struct KernelInner {
     pub memory_store: MemoryStore,
     pub decision_engine: Option<Arc<dyn DecisionEngine>>,
     pub controls: RwLock<HashMap<RuntimeId, watch::Sender<bool>>>,
+    lifecycle_locks: RwLock<HashMap<RuntimeId, Arc<Mutex<()>>>>,
 }
 
 impl Kernel {
@@ -265,6 +266,7 @@ impl Kernel {
                 memory_store,
                 decision_engine,
                 controls: RwLock::new(HashMap::new()),
+                lifecycle_locks: RwLock::new(HashMap::new()),
             }),
         };
         kernel.hydrate().await?;
@@ -331,6 +333,7 @@ impl Kernel {
             decision_type,
             options,
         )
+        .with_runtime_updated_at(runtime.updated_at)
         .with_context(context)
         .with_constraints(constraints))
     }
@@ -343,7 +346,6 @@ impl Kernel {
         let expected_branch_id = self.branch_id(runtime.id).await?;
         if runtime.mission_id != request.mission_id
             || runtime.parent_id != request.runtime_state.parent_runtime_id
-            || runtime.state != request.runtime_state.lifecycle_state
             || runtime.objective != request.runtime_state.objective
             || expected_branch_id != request.branch_id
         {
@@ -351,6 +353,32 @@ impl Kernel {
                 "runtime, mission, branch, or state does not match the current runtime".into(),
             )
             .into());
+        }
+
+        if runtime.state != request.runtime_state.lifecycle_state
+            || runtime.updated_at != request.runtime_updated_at
+        {
+            self.publish(RuntimeEvent::DecisionRequested {
+                mission_id: runtime.mission_id,
+                runtime_id: runtime.id,
+                parent_id: runtime.parent_id,
+                request_id: request.request_id,
+                decision_type: request.decision_type.clone(),
+                timestamp: now_millis(),
+            })?;
+            let error = DecisionError::Stale(format!(
+                "runtime {} changed before decision request {} was dispatched",
+                runtime.id, request.request_id
+            ));
+            self.publish(RuntimeEvent::DecisionStale {
+                mission_id: runtime.mission_id,
+                runtime_id: runtime.id,
+                parent_id: runtime.parent_id,
+                request_id: request.request_id,
+                error: error.clone(),
+                timestamp: now_millis(),
+            })?;
+            return Err(error.into());
         }
 
         self.publish(RuntimeEvent::DecisionRequested {
@@ -412,6 +440,212 @@ impl Kernel {
             timestamp: now_millis(),
         })?;
         Ok(result)
+    }
+
+    /// Applies an already validated lifecycle proposal through the kernel's
+    /// versioned runtime transition path.
+    pub async fn apply_lifecycle_decision(
+        &self,
+        request: &DecisionRequest,
+        result: &DecisionResult,
+    ) -> Result<AppliedDecision> {
+        request.validate()?;
+        if let Err(error) = result.validate_for(request) {
+            self.publish(RuntimeEvent::DecisionRejected {
+                mission_id: request.mission_id,
+                runtime_id: request.runtime_id,
+                parent_id: request.runtime_state.parent_runtime_id,
+                request_id: request.request_id,
+                selected_option: result.selected_option.clone(),
+                error: error.clone(),
+                timestamp: now_millis(),
+            })?;
+            return Err(error.into());
+        }
+        if request.decision_type != DecisionType::RuntimeLifecycle {
+            return self
+                .reject_lifecycle(
+                    request,
+                    result,
+                    "only RuntimeLifecycle decisions can be applied".into(),
+                )
+                .await;
+        }
+        let (next, no_op) = match result.selected_option.as_str() {
+            "continue" => match request.runtime_state.lifecycle_state {
+                RuntimeState::Ready | RuntimeState::Waiting => (RuntimeState::Running, false),
+                RuntimeState::Running => (RuntimeState::Running, true),
+                state => {
+                    return self
+                        .reject_lifecycle(
+                            request,
+                            result,
+                            format!("continue is not valid from {state}"),
+                        )
+                        .await
+                }
+            },
+            "wait" => (RuntimeState::Waiting, false),
+            "complete" => (RuntimeState::Completed, false),
+            "fail" => (RuntimeState::Failed, false),
+            option => {
+                return self
+                    .reject_lifecycle(
+                        request,
+                        result,
+                        format!("unsupported lifecycle option: {option}"),
+                    )
+                    .await
+            }
+        };
+        if !no_op
+            && !request
+                .runtime_state
+                .lifecycle_state
+                .can_transition_to(next)
+        {
+            return self
+                .reject_lifecycle(
+                    request,
+                    result,
+                    format!(
+                        "transition from {} to {next} is not allowed",
+                        request.runtime_state.lifecycle_state
+                    ),
+                )
+                .await;
+        }
+
+        let _guard = self
+            .lifecycle_lock(request.runtime_id)
+            .await
+            .lock_owned()
+            .await;
+        let runtime = self.get_runtime(request.runtime_id).await?;
+        if runtime.mission_id != request.mission_id
+            || runtime.parent_id != request.runtime_state.parent_runtime_id
+            || runtime.objective != request.runtime_state.objective
+            || runtime.state != request.runtime_state.lifecycle_state
+            || runtime.updated_at != request.runtime_updated_at
+            || self.branch_id(runtime.id).await? != request.branch_id
+        {
+            let error = DecisionError::Stale(format!(
+                "runtime {} changed after request {} was created",
+                request.runtime_id, request.request_id
+            ));
+            self.publish(RuntimeEvent::DecisionStale {
+                mission_id: request.mission_id,
+                runtime_id: request.runtime_id,
+                parent_id: request.runtime_state.parent_runtime_id,
+                request_id: request.request_id,
+                error: error.clone(),
+                timestamp: now_millis(),
+            })?;
+            return Err(error.into());
+        }
+        let timestamp = now_millis();
+        let resulting_state = if no_op {
+            runtime.state
+        } else {
+            let updated = match self
+                .transition_runtime_locked(request.runtime_id, next)
+                .await
+            {
+                Ok(updated) => updated,
+                Err(WyvernError::Decision(error @ DecisionError::Stale(_))) => {
+                    self.publish(RuntimeEvent::DecisionStale {
+                        mission_id: request.mission_id,
+                        runtime_id: request.runtime_id,
+                        parent_id: request.runtime_state.parent_runtime_id,
+                        request_id: request.request_id,
+                        error: error.clone(),
+                        timestamp: now_millis(),
+                    })?;
+                    return Err(error.into());
+                }
+                Err(error) => return Err(error),
+            };
+            self.publish(RuntimeEvent::DecisionAccepted {
+                mission_id: request.mission_id,
+                runtime_id: request.runtime_id,
+                parent_id: request.runtime_state.parent_runtime_id,
+                request_id: request.request_id,
+                selected_option: result.selected_option.clone(),
+                from: runtime.state,
+                to: next,
+                changed_state: true,
+                timestamp,
+            })?;
+            self.publish(RuntimeEvent::RuntimeStateChanged {
+                mission_id: updated.mission_id,
+                runtime_id: updated.id,
+                parent_id: updated.parent_id,
+                from: runtime.state,
+                to: next,
+                timestamp,
+            })?;
+            next
+        };
+        let applied = AppliedDecision {
+            request_id: request.request_id,
+            runtime_id: request.runtime_id,
+            selected_option: result.selected_option.clone(),
+            previous_state: runtime.state,
+            resulting_state,
+            applied_at: timestamp,
+            changed_state: !no_op,
+        };
+        if no_op {
+            self.publish(RuntimeEvent::DecisionAccepted {
+                mission_id: request.mission_id,
+                runtime_id: request.runtime_id,
+                parent_id: request.runtime_state.parent_runtime_id,
+                request_id: request.request_id,
+                selected_option: result.selected_option.clone(),
+                from: runtime.state,
+                to: resulting_state,
+                changed_state: !no_op,
+                timestamp,
+            })?;
+        }
+        Ok(applied)
+    }
+
+    async fn reject_lifecycle<T>(
+        &self,
+        request: &DecisionRequest,
+        result: &DecisionResult,
+        reason: String,
+    ) -> Result<T> {
+        let error = DecisionError::Rejected(reason);
+        self.publish(RuntimeEvent::DecisionRejected {
+            mission_id: request.mission_id,
+            runtime_id: request.runtime_id,
+            parent_id: request.runtime_state.parent_runtime_id,
+            request_id: request.request_id,
+            selected_option: result.selected_option.clone(),
+            error: error.clone(),
+            timestamp: now_millis(),
+        })?;
+        Err(error.into())
+    }
+
+    async fn lifecycle_lock(&self, runtime_id: RuntimeId) -> Arc<Mutex<()>> {
+        if let Some(lock) = self
+            .inner
+            .lifecycle_locks
+            .read()
+            .await
+            .get(&runtime_id)
+            .cloned()
+        {
+            return lock;
+        }
+        let mut locks = self.inner.lifecycle_locks.write().await;
+        locks
+            .entry(runtime_id)
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
     }
 
     async fn branch_id(&self, runtime_id: RuntimeId) -> Result<RuntimeId> {
@@ -959,18 +1193,20 @@ impl Kernel {
         agent: &AgentDefinition,
         objective: impl Into<String>,
     ) -> Result<RuntimeHandle> {
+        let _guard = self
+            .lifecycle_lock(parent_runtime_id)
+            .await
+            .lock_owned()
+            .await;
         let parent = self.get_runtime(parent_runtime_id).await?;
         let handle = self
             .create_runtime(parent.mission_id, Some(parent_runtime_id), agent, objective)
             .await?;
-        self.inner
-            .runtimes
-            .add_child(parent_runtime_id, handle.id())
-            .await?;
         if let Some(mut parent_runtime) = self.inner.runtimes.get(parent_runtime_id).await {
             if !parent_runtime.children.contains(&handle.id()) {
                 parent_runtime.children.push(handle.id());
-                parent_runtime.updated_at = now_millis();
+                parent_runtime.updated_at =
+                    now_millis().max(parent_runtime.updated_at.saturating_add(1));
                 self.inner
                     .store
                     .upsert_runtime(&parent_runtime, &self.agent(parent_runtime.agent_id).await?)
@@ -994,21 +1230,9 @@ impl Kernel {
         runtime_id: RuntimeId,
         next: RuntimeState,
     ) -> Result<Runtime> {
-        let mut runtime = self.get_runtime(runtime_id).await?;
-        let from = runtime.state;
-        runtime.transition_to(next)?;
-        let agent = self.agent(runtime.agent_id).await?;
-        self.inner.store.upsert_runtime(&runtime, &agent).await?;
-        self.inner.runtimes.update(runtime.clone()).await;
-        if runtime.parent_id.is_none() && next == RuntimeState::Running {
-            if let Some(mut mission) = self.inner.missions.get(runtime.mission_id).await {
-                if mission.state == MissionState::Created {
-                    mission.transition_to(MissionState::Running)?;
-                    self.inner.store.upsert_mission(&mission).await?;
-                    self.inner.missions.update(mission.clone()).await;
-                }
-            }
-        }
+        let _guard = self.lifecycle_lock(runtime_id).await.lock_owned().await;
+        let from = self.get_runtime(runtime_id).await?.state;
+        let runtime = self.transition_runtime_locked(runtime_id, next).await?;
         self.publish(RuntimeEvent::RuntimeStateChanged {
             mission_id: runtime.mission_id,
             runtime_id,
@@ -1020,11 +1244,53 @@ impl Kernel {
         Ok(runtime)
     }
 
+    async fn transition_runtime_locked(
+        &self,
+        runtime_id: RuntimeId,
+        next: RuntimeState,
+    ) -> Result<Runtime> {
+        let mut runtime = self.get_runtime(runtime_id).await?;
+        let from = runtime.state;
+        let expected_updated_at = runtime.updated_at;
+        runtime.transition_to(next)?;
+        if !self
+            .inner
+            .store
+            .compare_and_transition_runtime_state(
+                runtime_id,
+                from,
+                expected_updated_at,
+                next,
+                runtime.updated_at,
+            )
+            .await?
+        {
+            let persisted = self.inner.store.get_runtime(runtime_id).await?;
+            return Err(DecisionError::Stale(format!(
+                "runtime {runtime_id} changed during transition (expected {from} at {expected_updated_at}, persisted {:?})",
+                persisted.map(|runtime| (runtime.state, runtime.updated_at))
+            ))
+            .into());
+        }
+        self.inner.runtimes.update(runtime.clone()).await;
+        if runtime.parent_id.is_none() && next == RuntimeState::Running {
+            if let Some(mut mission) = self.inner.missions.get(runtime.mission_id).await {
+                if mission.state == MissionState::Created {
+                    mission.transition_to(MissionState::Running)?;
+                    self.inner.store.upsert_mission(&mission).await?;
+                    self.inner.missions.update(mission.clone()).await;
+                }
+            }
+        }
+        Ok(runtime)
+    }
+
     pub async fn complete_runtime(
         &self,
         runtime_id: RuntimeId,
         result: RuntimeResult,
     ) -> Result<Runtime> {
+        let _guard = self.lifecycle_lock(runtime_id).await.lock_owned().await;
         let mut runtime = self.get_runtime(runtime_id).await?;
         runtime.set_result(result.clone());
         runtime.transition_to(RuntimeState::Completed)?;
@@ -1055,6 +1321,7 @@ impl Kernel {
         runtime_id: RuntimeId,
         message: impl Into<String>,
     ) -> Result<Runtime> {
+        let _guard = self.lifecycle_lock(runtime_id).await.lock_owned().await;
         let message = message.into();
         let mut runtime = self.get_runtime(runtime_id).await?;
         runtime.transition_to(RuntimeState::Failed)?;
@@ -1080,6 +1347,7 @@ impl Kernel {
     }
 
     pub async fn cancel_runtime(&self, runtime_id: RuntimeId) -> Result<Runtime> {
+        let _guard = self.lifecycle_lock(runtime_id).await.lock_owned().await;
         let mut runtime = self.get_runtime(runtime_id).await?;
         if !matches!(
             runtime.state,
@@ -1134,6 +1402,7 @@ impl Kernel {
 
     /// Marks a runtime interrupted during scheduler recovery without requiring its agent definition.
     pub async fn mark_runtime_interrupted(&self, runtime_id: RuntimeId) -> Result<Runtime> {
+        let _guard = self.lifecycle_lock(runtime_id).await.lock_owned().await;
         let mut runtime = self.get_runtime(runtime_id).await?;
         let from = runtime.state;
         if from != RuntimeState::Running {
@@ -1631,6 +1900,56 @@ impl RuntimeHandle {
             )
             .await?;
         self.kernel.decide(request).await
+    }
+
+    /// Requests and applies the bounded RuntimeLifecycle decision. The engine
+    /// receives only the explicit context and the four fixed lifecycle choices.
+    pub async fn decide_and_apply(
+        &self,
+        context: DecisionContext,
+        constraints: Vec<DecisionConstraint>,
+    ) -> Result<DecisionApplication> {
+        let options = [
+            ("continue", "Continue execution"),
+            ("wait", "Wait for an external condition"),
+            ("complete", "Mark this runtime complete"),
+            ("fail", "Mark this runtime failed"),
+        ]
+        .into_iter()
+        .map(|(id, description)| DecisionOption::new(id, description))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+        let request = self
+            .kernel
+            .build_decision_request(
+                self.runtime_id,
+                DecisionType::RuntimeLifecycle,
+                options,
+                context,
+                constraints,
+            )
+            .await?;
+        let proposal = self.kernel.decide(request.clone()).await?;
+        let outcome = self
+            .kernel
+            .apply_lifecycle_decision(&request, &proposal)
+            .await?;
+        Ok(DecisionApplication { proposal, outcome })
+    }
+
+    pub async fn apply_lifecycle_decision(
+        &self,
+        request: &DecisionRequest,
+        proposal: &DecisionResult,
+    ) -> Result<AppliedDecision> {
+        if request.runtime_id != self.runtime_id {
+            return Err(DecisionError::InvalidRequest(
+                "request belongs to a different runtime handle".into(),
+            )
+            .into());
+        }
+        self.kernel
+            .apply_lifecycle_decision(request, proposal)
+            .await
     }
 }
 

@@ -104,6 +104,34 @@ pub enum RuntimeEvent {
         error: DecisionError,
         timestamp: Timestamp,
     },
+    DecisionAccepted {
+        mission_id: MissionId,
+        runtime_id: RuntimeId,
+        parent_id: Option<RuntimeId>,
+        request_id: DecisionRequestId,
+        selected_option: DecisionOptionId,
+        from: RuntimeState,
+        to: RuntimeState,
+        changed_state: bool,
+        timestamp: Timestamp,
+    },
+    DecisionRejected {
+        mission_id: MissionId,
+        runtime_id: RuntimeId,
+        parent_id: Option<RuntimeId>,
+        request_id: DecisionRequestId,
+        selected_option: DecisionOptionId,
+        error: DecisionError,
+        timestamp: Timestamp,
+    },
+    DecisionStale {
+        mission_id: MissionId,
+        runtime_id: RuntimeId,
+        parent_id: Option<RuntimeId>,
+        request_id: DecisionRequestId,
+        error: DecisionError,
+        timestamp: Timestamp,
+    },
     MemoryCreated {
         mission_id: MissionId,
         runtime_id: RuntimeId,
@@ -218,6 +246,9 @@ impl RuntimeEvent {
             | Self::DecisionRequested { timestamp, .. }
             | Self::DecisionCompleted { timestamp, .. }
             | Self::DecisionFailed { timestamp, .. }
+            | Self::DecisionAccepted { timestamp, .. }
+            | Self::DecisionRejected { timestamp, .. }
+            | Self::DecisionStale { timestamp, .. }
             | Self::MemoryCreated { timestamp, .. }
             | Self::MemorySuperseded { timestamp, .. }
             | Self::MemoryInvalidated { timestamp, .. }
@@ -246,6 +277,9 @@ impl RuntimeEvent {
             | Self::DecisionRequested { runtime_id, .. }
             | Self::DecisionCompleted { runtime_id, .. }
             | Self::DecisionFailed { runtime_id, .. }
+            | Self::DecisionAccepted { runtime_id, .. }
+            | Self::DecisionRejected { runtime_id, .. }
+            | Self::DecisionStale { runtime_id, .. }
             | Self::MemoryCreated { runtime_id, .. }
             | Self::MemorySuperseded { runtime_id, .. }
             | Self::MemoryInvalidated { runtime_id, .. }
@@ -563,6 +597,36 @@ impl EventBus {
             } => {
                 tracing::warn!(mission_id = %mission_id, runtime_id = %runtime_id, request_id = %request_id, error = %error, "decision.failed")
             }
+            RuntimeEvent::DecisionAccepted {
+                mission_id,
+                runtime_id,
+                request_id,
+                selected_option,
+                from,
+                to,
+                changed_state,
+                ..
+            } => {
+                tracing::info!(mission_id = %mission_id, runtime_id = %runtime_id, request_id = %request_id, selected_option = %selected_option.as_str(), from = %from, to = %to, changed_state = *changed_state, "decision.accepted")
+            }
+            RuntimeEvent::DecisionRejected {
+                mission_id,
+                runtime_id,
+                request_id,
+                error,
+                ..
+            } => {
+                tracing::warn!(mission_id = %mission_id, runtime_id = %runtime_id, request_id = %request_id, error = %error, "decision.rejected")
+            }
+            RuntimeEvent::DecisionStale {
+                mission_id,
+                runtime_id,
+                request_id,
+                error,
+                ..
+            } => {
+                tracing::warn!(mission_id = %mission_id, runtime_id = %runtime_id, request_id = %request_id, error = %error, "decision.stale")
+            }
         }
     }
 }
@@ -581,6 +645,9 @@ impl RuntimeEvent {
             Self::DecisionRequested { .. } => "decision.requested",
             Self::DecisionCompleted { .. } => "decision.completed",
             Self::DecisionFailed { .. } => "decision.failed",
+            Self::DecisionAccepted { .. } => "decision.accepted",
+            Self::DecisionRejected { .. } => "decision.rejected",
+            Self::DecisionStale { .. } => "decision.stale",
             Self::MemoryCreated { .. } => "memory.created",
             Self::MemorySuperseded { .. } => "memory.superseded",
             Self::MemoryInvalidated { .. } => "memory.invalidated",
@@ -633,6 +700,9 @@ impl RuntimeEvent {
             | Self::DecisionRequested { mission_id, .. }
             | Self::DecisionCompleted { mission_id, .. }
             | Self::DecisionFailed { mission_id, .. }
+            | Self::DecisionAccepted { mission_id, .. }
+            | Self::DecisionRejected { mission_id, .. }
+            | Self::DecisionStale { mission_id, .. }
             | Self::MemoryCreated { mission_id, .. }
             | Self::MemorySuperseded { mission_id, .. }
             | Self::MemoryInvalidated { mission_id, .. }
@@ -668,6 +738,9 @@ impl RuntimeEvent {
             | Self::DecisionRequested { parent_id, .. }
             | Self::DecisionCompleted { parent_id, .. }
             | Self::DecisionFailed { parent_id, .. } => *parent_id,
+            Self::DecisionAccepted { parent_id, .. }
+            | Self::DecisionRejected { parent_id, .. }
+            | Self::DecisionStale { parent_id, .. } => *parent_id,
             Self::MemoryCreated { .. }
             | Self::MemorySuperseded { .. }
             | Self::MemoryInvalidated { .. }

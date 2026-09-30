@@ -29,6 +29,10 @@ pub enum DecisionError {
     InternalFailure(String),
     #[error("decision engine returned a malformed result: {0}")]
     MalformedResult(String),
+    #[error("decision is stale: {0}")]
+    Stale(String),
+    #[error("decision was rejected: {0}")]
+    Rejected(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -184,6 +188,8 @@ pub struct DecisionRequest {
     pub decision_type: DecisionType,
     pub options: Vec<DecisionOption>,
     pub runtime_state: DecisionRuntimeState,
+    /// Runtime version captured when the request was compiled.
+    pub runtime_updated_at: Timestamp,
     pub context: DecisionContext,
     pub constraints: Vec<DecisionConstraint>,
     pub created_at: Timestamp,
@@ -213,6 +219,7 @@ impl DecisionRequest {
                 lifecycle_state,
                 objective: objective.into(),
             },
+            runtime_updated_at: 0,
             context: DecisionContext::default(),
             constraints: Vec::new(),
             created_at: now_millis(),
@@ -221,6 +228,11 @@ impl DecisionRequest {
 
     pub fn with_context(mut self, context: DecisionContext) -> Self {
         self.context = context;
+        self
+    }
+
+    pub fn with_runtime_updated_at(mut self, updated_at: Timestamp) -> Self {
+        self.runtime_updated_at = updated_at;
         self
     }
 
@@ -279,6 +291,23 @@ pub struct DecisionResult {
     pub engine: DecisionEngineProvenance,
     pub reasoning: Option<String>,
     pub latency_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppliedDecision {
+    pub request_id: DecisionRequestId,
+    pub runtime_id: RuntimeId,
+    pub selected_option: DecisionOptionId,
+    pub previous_state: RuntimeState,
+    pub resulting_state: RuntimeState,
+    pub applied_at: Timestamp,
+    pub changed_state: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DecisionApplication {
+    pub proposal: DecisionResult,
+    pub outcome: AppliedDecision,
 }
 
 impl DecisionResult {

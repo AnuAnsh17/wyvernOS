@@ -54,6 +54,19 @@ pub trait RuntimeStore: Send + Sync {
             "runtime store does not support atomic state recovery".into(),
         ))
     }
+    async fn compare_and_transition_runtime_state(
+        &self,
+        runtime_id: RuntimeId,
+        expected: RuntimeState,
+        expected_updated_at: i64,
+        next: RuntimeState,
+        updated_at: i64,
+    ) -> Result<bool> {
+        let _ = (runtime_id, expected, expected_updated_at, next, updated_at);
+        Err(WyvernError::Scheduler(
+            "runtime store does not support versioned state transitions".into(),
+        ))
+    }
 }
 
 #[derive(Clone)]
@@ -252,6 +265,27 @@ impl RuntimeStore for SqliteRuntimeStore {
         )
         .bind(runtime_id.to_string())
         .bind(expected.to_string())
+        .bind(next.to_string())
+        .bind(updated_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    async fn compare_and_transition_runtime_state(
+        &self,
+        runtime_id: RuntimeId,
+        expected: RuntimeState,
+        expected_updated_at: i64,
+        next: RuntimeState,
+        updated_at: i64,
+    ) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE runtimes SET state = ?4, updated_at = ?5 WHERE runtime_id = ?1 AND state = ?2 AND updated_at = ?3",
+        )
+        .bind(runtime_id.to_string())
+        .bind(expected.to_string())
+        .bind(expected_updated_at)
         .bind(next.to_string())
         .bind(updated_at)
         .execute(&self.pool)
