@@ -1,6 +1,6 @@
 use crate::behavior::BehaviorError;
 use crate::decision::DecisionError;
-use crate::domain::{MemoryId, MissionId, MissionState, RuntimeId, RuntimeState};
+use crate::domain::{AgentId, MemoryId, MissionId, MissionState, RuntimeId, RuntimeState};
 use crate::scheduler::SchedulerState;
 use thiserror::Error;
 
@@ -35,6 +35,19 @@ pub enum WyvernError {
     RuntimeNotFound(RuntimeId),
     #[error("mission not found: {0}")]
     MissionNotFound(MissionId),
+    #[error("agent not found: {0}")]
+    AgentNotFound(AgentId),
+    #[error("agent already exists: {0}")]
+    DuplicateAgent(AgentId),
+    #[error("persisted agent is invalid: {0}")]
+    InvalidPersistedAgent(String),
+    #[error("runtime {runtime_id} references missing agent {agent_id}")]
+    RuntimeAgentNotFound {
+        runtime_id: RuntimeId,
+        agent_id: AgentId,
+    },
+    #[error("persisted event is invalid: {0}")]
+    InvalidPersistedEvent(String),
     #[error("memory not found: {0}")]
     MemoryNotFound(MemoryId),
     #[error("persistence error: {0}")]

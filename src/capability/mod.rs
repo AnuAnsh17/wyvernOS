@@ -166,6 +166,8 @@ pub enum CapabilityError {
     Cancelled,
     #[error("registry error: {0}")]
     RegistryError(String),
+    #[error("event persistence failed: {0}")]
+    EventPersistence(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -435,29 +437,36 @@ impl CapabilityRegistry {
         cancellation: &CapabilityCancellation,
     ) -> CapabilityResult {
         let requested_at = now_millis();
-        self.publish(
-            &request,
-            RuntimeEvent::CapabilityRequested {
-                mission_id: request.mission_id,
-                runtime_id: request.runtime_id,
-                parent_id: request.parent_runtime_id,
-                request_id: request.request_id,
-                capability_id: request.capability_id,
-                tool_id: request.tool_id,
-                timestamp: requested_at,
-            },
-        );
+        if let Err(error) = self
+            .publish(
+                &request,
+                RuntimeEvent::CapabilityRequested {
+                    mission_id: request.mission_id,
+                    runtime_id: request.runtime_id,
+                    parent_id: request.parent_runtime_id,
+                    request_id: request.request_id,
+                    capability_id: request.capability_id,
+                    tool_id: request.tool_id,
+                    timestamp: requested_at,
+                },
+            )
+            .await
+        {
+            return self.event_failure(&request, error, None);
+        }
 
         if !permission.allows(&request) {
-            return self.finish(
-                &request,
-                CapabilityRequestStatus::Rejected,
-                None,
-                Some(CapabilityError::PermissionDenied(
-                    "permission does not grant this capability, tool, and scope".into(),
-                )),
-                None,
-            );
+            return self
+                .finish(
+                    &request,
+                    CapabilityRequestStatus::Rejected,
+                    None,
+                    Some(CapabilityError::PermissionDenied(
+                        "permission does not grant this capability, tool, and scope".into(),
+                    )),
+                    None,
+                )
+                .await;
         }
 
         let registered = {
@@ -479,37 +488,46 @@ impl CapabilityRegistry {
             } else {
                 CapabilityError::ToolNotFound(request.tool_id)
             };
-            return self.finish(
-                &request,
-                CapabilityRequestStatus::Rejected,
-                None,
-                Some(error),
-                None,
-            );
+            return self
+                .finish(
+                    &request,
+                    CapabilityRequestStatus::Rejected,
+                    None,
+                    Some(error),
+                    None,
+                )
+                .await;
         };
         if descriptor.id != request.capability_id {
-            return self.finish(
-                &request,
-                CapabilityRequestStatus::Rejected,
-                None,
-                Some(CapabilityError::CapabilityNotFound(request.capability_id)),
-                None,
-            );
+            return self
+                .finish(
+                    &request,
+                    CapabilityRequestStatus::Rejected,
+                    None,
+                    Some(CapabilityError::CapabilityNotFound(request.capability_id)),
+                    None,
+                )
+                .await;
         }
 
         let start = now_millis();
-        self.publish(
-            &request,
-            RuntimeEvent::CapabilityStarted {
-                mission_id: request.mission_id,
-                runtime_id: request.runtime_id,
-                parent_id: request.parent_runtime_id,
-                request_id: request.request_id,
-                capability_id: request.capability_id,
-                tool_id: request.tool_id,
-                timestamp: start,
-            },
-        );
+        if let Err(error) = self
+            .publish(
+                &request,
+                RuntimeEvent::CapabilityStarted {
+                    mission_id: request.mission_id,
+                    runtime_id: request.runtime_id,
+                    parent_id: request.parent_runtime_id,
+                    request_id: request.request_id,
+                    capability_id: request.capability_id,
+                    tool_id: request.tool_id,
+                    timestamp: start,
+                },
+            )
+            .await
+        {
+            return self.event_failure(&request, error, Some(start));
+        }
         let timeout = Duration::from_millis(request.timeout_ms.unwrap_or(30_000).max(1));
         let mut cancelled = cancellation.subscribe();
         let execution = executor.execute(request.clone());
@@ -530,38 +548,50 @@ impl CapabilityRegistry {
         };
         request.requested_at = requested_at;
         match outcome {
-            Ok(output) => self.finish(
-                &request,
-                CapabilityRequestStatus::Succeeded,
-                Some(output),
-                None,
-                Some(start),
-            ),
-            Err(error @ CapabilityError::Cancelled) => self.finish(
-                &request,
-                CapabilityRequestStatus::Cancelled,
-                None,
-                Some(error),
-                Some(start),
-            ),
-            Err(error @ CapabilityError::ExecutionTimeout) => self.finish(
-                &request,
-                CapabilityRequestStatus::TimedOut,
-                None,
-                Some(error),
-                Some(start),
-            ),
-            Err(error) => self.finish(
-                &request,
-                CapabilityRequestStatus::Failed,
-                None,
-                Some(error),
-                Some(start),
-            ),
+            Ok(output) => {
+                self.finish(
+                    &request,
+                    CapabilityRequestStatus::Succeeded,
+                    Some(output),
+                    None,
+                    Some(start),
+                )
+                .await
+            }
+            Err(error @ CapabilityError::Cancelled) => {
+                self.finish(
+                    &request,
+                    CapabilityRequestStatus::Cancelled,
+                    None,
+                    Some(error),
+                    Some(start),
+                )
+                .await
+            }
+            Err(error @ CapabilityError::ExecutionTimeout) => {
+                self.finish(
+                    &request,
+                    CapabilityRequestStatus::TimedOut,
+                    None,
+                    Some(error),
+                    Some(start),
+                )
+                .await
+            }
+            Err(error) => {
+                self.finish(
+                    &request,
+                    CapabilityRequestStatus::Failed,
+                    None,
+                    Some(error),
+                    Some(start),
+                )
+                .await
+            }
         }
     }
 
-    fn finish(
+    async fn finish(
         &self,
         request: &CapabilityRequest,
         status: CapabilityRequestStatus,
@@ -613,7 +643,9 @@ impl CapabilityRegistry {
                 timestamp: completed_at,
             },
         };
-        self.publish(request, event);
+        if let Err(error) = self.publish(request, event).await {
+            return self.event_failure(request, error, started_at);
+        }
         CapabilityResult {
             request_id: request.request_id,
             status,
@@ -625,8 +657,29 @@ impl CapabilityRegistry {
         }
     }
 
-    fn publish(&self, _request: &CapabilityRequest, event: RuntimeEvent) {
-        let _ = self.events.publish(event);
+    fn event_failure(
+        &self,
+        request: &CapabilityRequest,
+        error: crate::error::WyvernError,
+        started_at: Option<Timestamp>,
+    ) -> CapabilityResult {
+        CapabilityResult {
+            request_id: request.request_id,
+            status: CapabilityRequestStatus::Failed,
+            output: None,
+            error: Some(CapabilityError::EventPersistence(error.to_string())),
+            started_at,
+            completed_at: now_millis(),
+            metadata: BTreeMap::new(),
+        }
+    }
+
+    async fn publish(
+        &self,
+        _request: &CapabilityRequest,
+        event: RuntimeEvent,
+    ) -> crate::error::Result<()> {
+        self.events.publish(event).await
     }
 }
 

@@ -26,10 +26,12 @@ async fn setup() -> (
     let mission = kernel.create_mission("memory substrate").await.unwrap();
     let root_agent = kernel
         .register_agent(AgentDefinition::new("root", AgentKind::Commander))
-        .await;
+        .await
+        .unwrap();
     let branch_agent = kernel
         .register_agent(AgentDefinition::new("branch", AgentKind::WorkerA))
-        .await;
+        .await
+        .unwrap();
     let root = kernel
         .create_runtime(mission.id, None, &root_agent, "root")
         .await
@@ -113,7 +115,8 @@ async fn memory_scope_visibility_prevents_sibling_leakage() {
     let (kernel, _dir, _db, mission_id, root, branch_a, branch_b) = setup().await;
     let leaf_agent = kernel
         .register_agent(AgentDefinition::new("leaf", AgentKind::WorkerA1))
-        .await;
+        .await
+        .unwrap();
     let leaf_a = kernel
         .spawn_child(branch_a.id(), &leaf_agent, "leaf a")
         .await
@@ -321,7 +324,8 @@ async fn promotion_copies_memory_to_parent_and_keeps_sibling_private() {
     let (kernel, _dir, _db, mission_id, root, branch_a, branch_b) = setup().await;
     let leaf_agent = kernel
         .register_agent(AgentDefinition::new("leaf", AgentKind::WorkerA1))
-        .await;
+        .await
+        .unwrap();
     let leaf = kernel
         .spawn_child(branch_a.id(), &leaf_agent, "leaf")
         .await
@@ -500,7 +504,8 @@ async fn concurrent_branch_memory_writes_keep_scope_and_provenance() {
     let (kernel, _dir, _db, mission_id, root, branch_a, branch_b) = setup().await;
     let leaf_agent = kernel
         .register_agent(AgentDefinition::new("leaf", AgentKind::WorkerA1))
-        .await;
+        .await
+        .unwrap();
     let leaf_a1 = kernel
         .spawn_child(branch_a.id(), &leaf_agent, "a1")
         .await

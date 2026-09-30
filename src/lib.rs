@@ -37,7 +37,7 @@ pub use decision::{
     DecisionRuntimeState, DecisionType, MockDecisionEngine,
 };
 pub use domain::{
-    CapabilityId, CapabilityRequestId, DecisionRequestId, MemoryId, Mission, MissionId,
+    CapabilityId, CapabilityRequestId, DecisionRequestId, EventId, MemoryId, Mission, MissionId,
     MissionState, RuntimeId, RuntimeState, Timestamp, ToolId,
 };
 pub use error::{Result, WyvernError};
@@ -46,6 +46,7 @@ pub use memory::{
     MemoryDraft, MemoryItem, MemoryMetadata, MemoryMetadataValue, MemoryProvenance, MemoryQuery,
     MemoryScope, MemoryStatus, MemoryStore, MemoryType,
 };
+pub use persistence::StoredEvent;
 pub use result::{RuntimeOutcome, RuntimeResult};
 pub use scheduler::{
     RuntimeExecutionError, RuntimePriority, ScheduleOptions, ScheduledRuntime,

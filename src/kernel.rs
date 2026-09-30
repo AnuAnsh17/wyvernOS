@@ -20,7 +20,7 @@ use crate::domain::{now_millis, Mission, MissionId, MissionState, RuntimeId, Run
 use crate::error::{Result, WyvernError};
 use crate::events::{EventBus, RuntimeEvent};
 use crate::memory::{MemoryDraft, MemoryItem, MemoryStore};
-use crate::persistence::{RuntimeStore, SqliteRuntimeStore};
+use crate::persistence::{RuntimeStore, SqliteRuntimeStore, StoredEvent};
 use crate::result::{RuntimeOutcome, RuntimeResult};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -188,10 +188,14 @@ pub struct AgentRegistry {
 }
 
 impl AgentRegistry {
-    pub async fn register(&self, agent: AgentDefinition) -> AgentDefinition {
+    pub async fn register(&self, agent: AgentDefinition) -> Result<AgentDefinition> {
+        let mut by_id = self.by_id.write().await;
+        if by_id.contains_key(&agent.id) {
+            return Err(WyvernError::DuplicateAgent(agent.id));
+        }
         self.by_kind.write().await.insert(agent.kind, agent.id);
-        self.by_id.write().await.insert(agent.id, agent.clone());
-        agent
+        by_id.insert(agent.id, agent.clone());
+        Ok(agent)
     }
 
     pub async fn get(&self, agent_id: crate::agent::AgentId) -> Option<AgentDefinition> {
@@ -232,7 +236,7 @@ impl Kernel {
     pub async fn new(store: Arc<dyn RuntimeStore>) -> Result<Self> {
         let behavior_registry = crate::behavior::demo::registry_with_demo_behaviors().await?;
         let context_store = ContextStore::in_memory().await?;
-        let events = EventBus::new(1024);
+        let events = EventBus::with_store(1024, store.clone());
         let memory_store = MemoryStore::in_memory(events.clone()).await?;
         Self::new_with_stores(
             store,
@@ -251,7 +255,7 @@ impl Kernel {
     ) -> Result<Self> {
         let behavior_registry = crate::behavior::demo::registry_with_demo_behaviors().await?;
         let context_store = ContextStore::in_memory().await?;
-        let events = EventBus::new(1024);
+        let events = EventBus::with_store(1024, store.clone());
         let memory_store = MemoryStore::in_memory(events.clone()).await?;
         Self::new_with_stores(
             store,
@@ -297,7 +301,7 @@ impl Kernel {
         let behavior_registry = crate::behavior::demo::registry_with_demo_behaviors().await?;
         let store = SqliteRuntimeStore::open(&path).await?;
         let context_store = ContextStore::open(&path).await?;
-        let events = EventBus::new(1024);
+        let events = EventBus::with_store(1024, Arc::new(store.clone()));
         let memory_store = MemoryStore::open(&path, events.clone()).await?;
         Self::new_with_stores(
             Arc::new(store),
@@ -317,7 +321,7 @@ impl Kernel {
         let behavior_registry = crate::behavior::demo::registry_with_demo_behaviors().await?;
         let store = SqliteRuntimeStore::open(&path).await?;
         let context_store = ContextStore::open(&path).await?;
-        let events = EventBus::new(1024);
+        let events = EventBus::with_store(1024, Arc::new(store.clone()));
         let memory_store = MemoryStore::open(&path, events.clone()).await?;
         Self::new_with_stores(
             Arc::new(store),
@@ -335,7 +339,7 @@ impl Kernel {
         behavior_registry: RuntimeBehaviorRegistry,
     ) -> Result<Self> {
         let context_store = ContextStore::in_memory().await?;
-        let events = EventBus::new(1024);
+        let events = EventBus::with_store(1024, store.clone());
         let memory_store = MemoryStore::in_memory(events.clone()).await?;
         Self::new_with_stores(
             store,
@@ -354,7 +358,7 @@ impl Kernel {
     ) -> Result<Self> {
         let store = SqliteRuntimeStore::open(&path).await?;
         let context_store = ContextStore::open(&path).await?;
-        let events = EventBus::new(1024);
+        let events = EventBus::with_store(1024, Arc::new(store.clone()));
         let memory_store = MemoryStore::open(&path, events.clone()).await?;
         Self::new_with_stores(
             Arc::new(store),
@@ -437,7 +441,8 @@ impl Kernel {
                 request_id: request.request_id,
                 decision_type: request.decision_type.clone(),
                 timestamp: now_millis(),
-            })?;
+            })
+            .await?;
             let error = DecisionError::Stale(format!(
                 "runtime {} changed before decision request {} was dispatched",
                 runtime.id, request.request_id
@@ -449,7 +454,8 @@ impl Kernel {
                 request_id: request.request_id,
                 error: error.clone(),
                 timestamp: now_millis(),
-            })?;
+            })
+            .await?;
             return Err(error.into());
         }
 
@@ -460,7 +466,8 @@ impl Kernel {
             request_id: request.request_id,
             decision_type: request.decision_type.clone(),
             timestamp: now_millis(),
-        })?;
+        })
+        .await?;
 
         let Some(engine) = self.inner.decision_engine.as_ref() else {
             let error = crate::decision::DecisionError::EngineUnavailable;
@@ -471,7 +478,8 @@ impl Kernel {
                 request_id: request.request_id,
                 error: error.clone(),
                 timestamp: now_millis(),
-            })?;
+            })
+            .await?;
             return Err(error.into());
         };
 
@@ -485,7 +493,8 @@ impl Kernel {
                     request_id: request.request_id,
                     error: error.clone(),
                     timestamp: now_millis(),
-                })?;
+                })
+                .await?;
                 return Err(error.into());
             }
         };
@@ -498,7 +507,8 @@ impl Kernel {
                 request_id: request.request_id,
                 error: error.clone(),
                 timestamp: now_millis(),
-            })?;
+            })
+            .await?;
             return Err(error.into());
         }
 
@@ -510,7 +520,8 @@ impl Kernel {
             selected_option: result.selected_option.clone(),
             engine: result.engine.clone(),
             timestamp: now_millis(),
-        })?;
+        })
+        .await?;
         Ok(result)
     }
 
@@ -531,7 +542,8 @@ impl Kernel {
                 selected_option: result.selected_option.clone(),
                 error: error.clone(),
                 timestamp: now_millis(),
-            })?;
+            })
+            .await?;
             return Err(error.into());
         }
         if request.decision_type != DecisionType::RuntimeLifecycle {
@@ -612,7 +624,8 @@ impl Kernel {
                 request_id: request.request_id,
                 error: error.clone(),
                 timestamp: now_millis(),
-            })?;
+            })
+            .await?;
             return Err(error.into());
         }
         let timestamp = now_millis();
@@ -632,7 +645,8 @@ impl Kernel {
                         request_id: request.request_id,
                         error: error.clone(),
                         timestamp: now_millis(),
-                    })?;
+                    })
+                    .await?;
                     return Err(error.into());
                 }
                 Err(error) => return Err(error),
@@ -647,7 +661,8 @@ impl Kernel {
                 to: next,
                 changed_state: true,
                 timestamp,
-            })?;
+            })
+            .await?;
             self.publish(RuntimeEvent::RuntimeStateChanged {
                 mission_id: updated.mission_id,
                 runtime_id: updated.id,
@@ -655,7 +670,8 @@ impl Kernel {
                 from: runtime.state,
                 to: next,
                 timestamp,
-            })?;
+            })
+            .await?;
             next
         };
         let applied = AppliedDecision {
@@ -678,7 +694,8 @@ impl Kernel {
                 to: resulting_state,
                 changed_state: !no_op,
                 timestamp,
-            })?;
+            })
+            .await?;
         }
         Ok(applied)
     }
@@ -698,7 +715,8 @@ impl Kernel {
             selected_option: result.selected_option.clone(),
             error: error.clone(),
             timestamp: now_millis(),
-        })?;
+        })
+        .await?;
         Err(error.into())
     }
 
@@ -880,7 +898,8 @@ impl Kernel {
             parent_id: runtime.parent_id,
             keys: vec![key],
             timestamp: crate::domain::now_millis(),
-        })?;
+        })
+        .await?;
         Ok(context)
     }
 
@@ -1004,7 +1023,8 @@ impl Kernel {
             parent_id: parent.parent_id,
             keys: vec![format!("child:{}", result.runtime_id)],
             timestamp: crate::domain::now_millis(),
-        })?;
+        })
+        .await?;
         Ok(context)
     }
 
@@ -1046,14 +1066,60 @@ impl Kernel {
         self.inner.events.clone()
     }
 
+    pub async fn persisted_events(&self) -> Result<Vec<StoredEvent>> {
+        self.inner
+            .store
+            .list_events()
+            .await?
+            .iter()
+            .map(|event| event.into_stored_event())
+            .collect()
+    }
+
+    pub async fn events_for_runtime(&self, runtime_id: RuntimeId) -> Result<Vec<StoredEvent>> {
+        self.inner
+            .store
+            .events_for_runtime(runtime_id)
+            .await?
+            .iter()
+            .map(|event| event.into_stored_event())
+            .collect()
+    }
+
+    pub async fn events_for_mission(&self, mission_id: MissionId) -> Result<Vec<StoredEvent>> {
+        self.inner
+            .store
+            .events_for_mission(mission_id)
+            .await?
+            .iter()
+            .map(|event| event.into_stored_event())
+            .collect()
+    }
+
     async fn hydrate(&self) -> Result<()> {
+        for persisted in self.inner.store.list_agents().await? {
+            let agent = persisted.into_agent()?;
+            self.inner.agents.register(agent.clone()).await?;
+            self.inner
+                .behavior_registry
+                .bind_agent_default(agent.id, agent.kind)
+                .await;
+        }
+
         for mission in self.inner.store.list_missions().await? {
             self.inner.missions.insert(mission.into_mission()?).await;
         }
 
         let mut loaded_runtimes = Vec::new();
         for persisted in self.inner.store.list_runtimes().await? {
-            loaded_runtimes.push(persisted.into_runtime()?);
+            let runtime = persisted.into_runtime()?;
+            if self.inner.agents.get(runtime.agent_id).await.is_none() {
+                return Err(WyvernError::RuntimeAgentNotFound {
+                    runtime_id: runtime.id,
+                    agent_id: runtime.agent_id,
+                });
+            }
+            loaded_runtimes.push(runtime);
         }
 
         for runtime in loaded_runtimes {
@@ -1092,13 +1158,29 @@ impl Kernel {
         Ok(())
     }
 
-    pub async fn register_agent(&self, agent: AgentDefinition) -> AgentDefinition {
-        let agent = self.inner.agents.register(agent).await;
+    pub async fn register_agent(&self, agent: AgentDefinition) -> Result<AgentDefinition> {
+        if self.inner.agents.get(agent.id).await.is_some()
+            || self.inner.store.get_agent(agent.id).await?.is_some()
+        {
+            return Err(WyvernError::DuplicateAgent(agent.id));
+        }
+        self.inner.store.insert_agent(&agent).await?;
+        let agent = self.inner.agents.register(agent).await?;
         self.inner
             .behavior_registry
             .bind_agent_default(agent.id, agent.kind)
             .await;
-        agent
+        Ok(agent)
+    }
+
+    pub async fn list_agents(&self) -> Vec<AgentDefinition> {
+        let mut agents = self.inner.agents.list().await;
+        agents.sort_by_key(|agent| agent.id);
+        agents
+    }
+
+    pub async fn persisted_agents(&self) -> Result<Vec<crate::persistence::PersistedAgent>> {
+        self.inner.store.list_agents().await
     }
 
     pub async fn register_agent_with_behavior(
@@ -1106,14 +1188,21 @@ impl Kernel {
         agent: AgentDefinition,
         behavior: Arc<dyn RuntimeBehavior>,
     ) -> Result<AgentDefinition> {
-        if self.inner.agents.get(agent.id).await.is_some() {
-            return Err(BehaviorError::AgentAlreadyRegistered(agent.id).into());
+        if self.inner.agents.get(agent.id).await.is_some()
+            || self.inner.store.get_agent(agent.id).await?.is_some()
+        {
+            return Err(WyvernError::DuplicateAgent(agent.id));
         }
+        if self.inner.behavior_registry.is_bound(agent.id).await {
+            return Err(BehaviorError::DuplicateAgent(agent.id).into());
+        }
+        self.inner.store.insert_agent(&agent).await?;
+        let registered = self.inner.agents.register(agent.clone()).await?;
         self.inner
             .behavior_registry
             .register_for_agent(agent.id, behavior)
             .await?;
-        Ok(self.inner.agents.register(agent).await)
+        Ok(registered)
     }
 
     pub async fn register_behavior(
@@ -1140,7 +1229,7 @@ impl Kernel {
             .agents
             .get(agent_id)
             .await
-            .ok_or_else(|| WyvernError::ExecutionError(format!("agent not found: {agent_id}")))
+            .ok_or(WyvernError::AgentNotFound(agent_id))
     }
 
     pub async fn create_mission(&self, objective: impl Into<String>) -> Result<Mission> {
@@ -1285,7 +1374,8 @@ impl Kernel {
             parent_id,
             agent_id: agent.id,
             timestamp: now_millis(),
-        })?;
+        })
+        .await?;
 
         let handle = RuntimeHandle::new(self.clone(), runtime.id);
         handle.transition_to(RuntimeState::Ready).await?;
@@ -1326,7 +1416,8 @@ impl Kernel {
             child_runtime_id: handle.id(),
             child_agent_id: agent.id,
             timestamp: now_millis(),
-        })?;
+        })
+        .await?;
         Ok(handle)
     }
 
@@ -1345,7 +1436,8 @@ impl Kernel {
             from,
             to: next,
             timestamp: now_millis(),
-        })?;
+        })
+        .await?;
         Ok(runtime)
     }
 
@@ -1409,7 +1501,8 @@ impl Kernel {
             parent_id: runtime.parent_id,
             status: result.status,
             timestamp: now_millis(),
-        })?;
+        })
+        .await?;
         if runtime.parent_id.is_none() {
             if let Some(mut mission) = self.inner.missions.get(runtime.mission_id).await {
                 mission.assign_root_runtime(runtime.id);
@@ -1483,7 +1576,8 @@ impl Kernel {
             parent_id: runtime.parent_id,
             error: message,
             timestamp: now_millis(),
-        })?;
+        })
+        .await?;
         if runtime.parent_id.is_none() {
             if let Some(mut mission) = self.inner.missions.get(runtime.mission_id).await {
                 mission.transition_to(MissionState::Failed)?;
@@ -1519,7 +1613,8 @@ impl Kernel {
             runtime_id,
             parent_id: runtime.parent_id,
             timestamp: now_millis(),
-        })?;
+        })
+        .await?;
         if runtime.parent_id.is_none() {
             if let Some(mut mission) = self.inner.missions.get(runtime.mission_id).await {
                 mission.transition_to(MissionState::Cancelled)?;
@@ -1581,7 +1676,8 @@ impl Kernel {
             from,
             to: RuntimeState::Interrupted,
             timestamp: now_millis(),
-        })?;
+        })
+        .await?;
         Ok(runtime)
     }
 
@@ -1595,8 +1691,8 @@ impl Kernel {
         crate::behavior::demo::run_recursive_demo(self).await
     }
 
-    fn publish(&self, event: RuntimeEvent) -> Result<()> {
-        self.inner.events.publish(event)
+    async fn publish(&self, event: RuntimeEvent) -> Result<()> {
+        self.inner.events.publish(event).await
     }
 }
 
@@ -1666,13 +1762,15 @@ impl RuntimeExecutor {
                 )));
             }
         } else if runtime.state != RuntimeState::Running {
-            self.kernel.publish(RuntimeEvent::RuntimeStarted {
-                mission_id: runtime.mission_id,
-                runtime_id,
-                parent_id: runtime.parent_id,
-                agent_id: runtime.agent_id,
-                timestamp: now_millis(),
-            })?;
+            self.kernel
+                .publish(RuntimeEvent::RuntimeStarted {
+                    mission_id: runtime.mission_id,
+                    runtime_id,
+                    parent_id: runtime.parent_id,
+                    agent_id: runtime.agent_id,
+                    timestamp: now_millis(),
+                })
+                .await?;
             self.kernel
                 .transition_runtime(runtime_id, RuntimeState::Running)
                 .await?;

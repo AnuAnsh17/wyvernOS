@@ -280,7 +280,8 @@ impl MemoryStore {
                 memory_id: item.memory_id,
                 timestamp: item.created_at,
             },
-        )?;
+        )
+        .await?;
         Ok(item)
     }
 
@@ -471,7 +472,8 @@ impl MemoryStore {
                 replacement_memory_id: new_id,
                 timestamp: replacement_item.created_at,
             },
-        )?;
+        )
+        .await?;
         self.publish(
             replacement_item.mission_id,
             replacement_item
@@ -487,7 +489,8 @@ impl MemoryStore {
                 memory_id: replacement_item.memory_id,
                 timestamp: replacement_item.created_at,
             },
-        )?;
+        )
+        .await?;
         Ok(replacement_item)
     }
 
@@ -586,7 +589,8 @@ impl MemoryStore {
                 .source_runtime_id
                 .expect("validated provenance"),
             event,
-        )?;
+        )
+        .await?;
         Ok(item)
     }
 
@@ -626,7 +630,8 @@ impl MemoryStore {
                 source_memory_id: memory_id,
                 timestamp: promoted.created_at,
             },
-        )?;
+        )
+        .await?;
         self.publish(
             promoted.mission_id,
             promoted
@@ -642,7 +647,8 @@ impl MemoryStore {
                 memory_id: promoted.memory_id,
                 timestamp: promoted.created_at,
             },
-        )?;
+        )
+        .await?;
         Ok(promoted)
     }
 
@@ -734,13 +740,13 @@ impl MemoryStore {
         Ok(())
     }
 
-    fn publish(
+    async fn publish(
         &self,
         _mission_id: MissionId,
         _runtime_id: RuntimeId,
         event: RuntimeEvent,
     ) -> Result<()> {
-        self.events.publish(event)
+        self.events.publish(event).await
     }
 }
 

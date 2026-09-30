@@ -66,7 +66,8 @@ async fn setup(
         .unwrap();
     let agent = kernel
         .register_agent(AgentDefinition::new("worker", AgentKind::WorkerA))
-        .await;
+        .await
+        .unwrap();
     let runtime = kernel
         .create_runtime(mission.id, None, &agent, "perform bounded work")
         .await
@@ -143,7 +144,8 @@ async fn illegal_transition_is_rejected_without_runtime_change() {
     let created = kernel.create_mission("invalid transition").await.unwrap();
     let agent = kernel
         .register_agent(AgentDefinition::new("worker2", AgentKind::WorkerB))
-        .await;
+        .await
+        .unwrap();
     let fresh = kernel
         .create_runtime(created.id, None, &agent, "not started")
         .await

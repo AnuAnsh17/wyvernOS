@@ -25,7 +25,8 @@ async fn runtime() -> (Kernel, MissionId, RuntimeId, TempDir) {
     let mission = kernel.create_mission("capability boundary").await.unwrap();
     let agent = kernel
         .register_agent(AgentDefinition::new("worker", AgentKind::WorkerA))
-        .await;
+        .await
+        .unwrap();
     let runtime = kernel
         .create_runtime(mission.id, None, &agent, "exercise capability")
         .await
@@ -134,7 +135,7 @@ async fn mock_echo_succeeds_and_emits_routed_lifecycle_events() {
     );
     let mut event_ids: Vec<_> = envelopes
         .iter()
-        .map(|event| event.event_id.as_str())
+        .map(|event| event.event_id.to_string())
         .collect();
     event_ids.sort_unstable();
     event_ids.dedup();

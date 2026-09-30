@@ -94,7 +94,8 @@ async fn create_runtime(kernel: &Kernel) -> (MissionId, wyvern::RuntimeHandle) {
         .unwrap();
     let agent = kernel
         .register_agent(AgentDefinition::new("worker", AgentKind::WorkerA))
-        .await;
+        .await
+        .unwrap();
     let runtime = kernel
         .create_runtime(mission.id, None, &agent, "choose a safe next step")
         .await
@@ -261,10 +262,12 @@ async fn runtime_handle_injects_engine_builds_branch_identity_and_emits_envelope
     let mission = kernel.create_mission("branch identities").await.unwrap();
     let root_agent = kernel
         .register_agent(AgentDefinition::new("root", AgentKind::Commander))
-        .await;
+        .await
+        .unwrap();
     let child_agent = kernel
         .register_agent(AgentDefinition::new("child", AgentKind::WorkerA))
-        .await;
+        .await
+        .unwrap();
     let root = kernel
         .create_runtime(mission.id, None, &root_agent, "root")
         .await
@@ -396,7 +399,8 @@ async fn engine_failure_preserves_runtime_scheduler_context_memory_and_persisted
     let runtime_before = kernel.get_runtime(runtime.id()).await.unwrap();
     let scheduler_agent = kernel
         .register_agent(AgentDefinition::new("scheduled worker", AgentKind::WorkerB))
-        .await;
+        .await
+        .unwrap();
     let scheduled_runtime = kernel
         .create_runtime(
             mission_id,

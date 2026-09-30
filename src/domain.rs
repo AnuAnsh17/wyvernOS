@@ -29,6 +29,9 @@ pub struct CapabilityRequestId(Uuid);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DecisionRequestId(Uuid);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct EventId(Uuid);
+
 macro_rules! impl_id {
     ($name:ident, $prefix:literal) => {
         impl $name {
@@ -89,6 +92,13 @@ impl_id!(CapabilityId, "cap_");
 impl_id!(ToolId, "tool_");
 impl_id!(CapabilityRequestId, "creq_");
 impl_id!(DecisionRequestId, "dreq_");
+impl_id!(EventId, "event_");
+
+impl Default for EventId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 pub type Timestamp = i64;
 

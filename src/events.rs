@@ -1,7 +1,7 @@
 use crate::decision::{DecisionEngineProvenance, DecisionError, DecisionOptionId, DecisionType};
 use crate::domain::{
-    AgentId, CapabilityId, CapabilityRequestId, DecisionRequestId, MemoryId, MissionId, RuntimeId,
-    RuntimeState, Timestamp, ToolId,
+    AgentId, CapabilityId, CapabilityRequestId, DecisionRequestId, EventId, MemoryId, MissionId,
+    RuntimeId, RuntimeState, Timestamp, ToolId,
 };
 use crate::error::Result;
 use crate::result::RuntimeOutcome;
@@ -11,7 +11,7 @@ use tokio::sync::broadcast;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EventEnvelope {
-    pub event_id: String,
+    pub event_id: EventId,
     pub event_type: String,
     pub timestamp: Timestamp,
     pub mission_id: MissionId,
@@ -300,6 +300,7 @@ impl RuntimeEvent {
 pub struct EventBus {
     sender: broadcast::Sender<RuntimeEvent>,
     envelope_sender: broadcast::Sender<EventEnvelope>,
+    store: Option<std::sync::Arc<dyn crate::persistence::RuntimeStore>>,
 }
 
 impl EventBus {
@@ -309,7 +310,17 @@ impl EventBus {
         Self {
             sender,
             envelope_sender,
+            store: None,
         }
+    }
+
+    pub fn with_store(
+        buffer: usize,
+        store: std::sync::Arc<dyn crate::persistence::RuntimeStore>,
+    ) -> Self {
+        let mut bus = Self::new(buffer);
+        bus.store = Some(store);
+        bus
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<RuntimeEvent> {
@@ -320,10 +331,12 @@ impl EventBus {
         self.envelope_sender.subscribe()
     }
 
-    pub fn publish(&self, event: RuntimeEvent) -> Result<()> {
-        self.log(&event);
+    /// Persists first when a store is configured, then publishes on both live
+    /// channels. This does not make any preceding state mutation transactional
+    /// with the event append.
+    pub async fn publish(&self, event: RuntimeEvent) -> Result<()> {
         let envelope = EventEnvelope {
-            event_id: uuid::Uuid::now_v7().to_string(),
+            event_id: EventId::new(),
             event_type: event.event_type().to_string(),
             timestamp: event.timestamp(),
             mission_id: event.mission_id(),
@@ -331,6 +344,10 @@ impl EventBus {
             parent_runtime_id: event.parent_id(),
             payload: event.clone(),
         };
+        if let Some(store) = &self.store {
+            store.append_event(&envelope).await?;
+        }
+        self.log(&event);
         let _ = self.envelope_sender.send(envelope);
         let _ = self.sender.send(event);
         Ok(())

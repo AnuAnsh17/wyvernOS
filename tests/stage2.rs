@@ -46,13 +46,16 @@ async fn sibling_context_isolation_and_explicit_parent_propagation_work() {
     let mission = kernel.create_mission("branch isolation").await.unwrap();
     let root_agent = kernel
         .register_agent(AgentDefinition::new("root", AgentKind::Commander))
-        .await;
+        .await
+        .unwrap();
     let child_agent = kernel
         .register_agent(AgentDefinition::new("child", AgentKind::WorkerA))
-        .await;
+        .await
+        .unwrap();
     let leaf_agent = kernel
         .register_agent(AgentDefinition::new("leaf", AgentKind::WorkerA1))
-        .await;
+        .await
+        .unwrap();
     let root = kernel
         .create_runtime(mission.id, None, &root_agent, "root objective")
         .await
@@ -184,7 +187,8 @@ async fn concurrent_updates_are_not_lost_and_snapshots_are_immutable() {
     let mission = kernel.create_mission("concurrent").await.unwrap();
     let agent = kernel
         .register_agent(AgentDefinition::new("worker", AgentKind::WorkerA))
-        .await;
+        .await
+        .unwrap();
     let runtime = kernel
         .create_runtime(mission.id, None, &agent, "objective")
         .await
@@ -253,7 +257,8 @@ async fn context_and_snapshots_survive_reopen_and_events_have_envelopes() {
     let mission = kernel.create_mission("persist").await.unwrap();
     let agent = kernel
         .register_agent(AgentDefinition::new("worker", AgentKind::WorkerA))
-        .await;
+        .await
+        .unwrap();
     let runtime = kernel
         .create_runtime(mission.id, None, &agent, "objective")
         .await
@@ -312,7 +317,8 @@ async fn context_updates_publish_machine_readable_events() {
     let mission = kernel.create_mission("context event").await.unwrap();
     let agent = kernel
         .register_agent(AgentDefinition::new("worker", AgentKind::WorkerA))
-        .await;
+        .await
+        .unwrap();
     let runtime = kernel
         .create_runtime(mission.id, None, &agent, "objective")
         .await

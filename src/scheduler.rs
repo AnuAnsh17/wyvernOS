@@ -561,7 +561,7 @@ impl Scheduler {
             error: None,
         };
         self.shared.store.insert(&entry).await?;
-        publish_state(&self.shared.kernel, &entry, None);
+        publish_state(&self.shared.kernel, &entry, None).await?;
         refresh_dependencies(&self.shared).await?;
         self.shared.notify.notify_one();
         Ok(self.shared.store.get(runtime_id).await?.unwrap_or(entry))
@@ -611,7 +611,7 @@ impl Scheduler {
                     .await?
                 {
                     let updated = self.get(runtime_id).await?;
-                    publish_state(&self.shared.kernel, &updated, None);
+                    publish_state(&self.shared.kernel, &updated, None).await?;
                 } else if self.get(runtime_id).await?.state == SchedulerState::Running {
                     signal_active(&self.shared, runtime_id, WorkerSignal::Wait).await?;
                 } else {
@@ -656,7 +656,7 @@ impl Scheduler {
             )));
         }
         let entry = self.get(runtime_id).await?;
-        publish_state(&self.shared.kernel, &entry, Some("resumed".into()));
+        publish_state(&self.shared.kernel, &entry, Some("resumed".into())).await?;
         self.shared.notify.notify_one();
         Ok(())
     }
@@ -688,7 +688,7 @@ impl Scheduler {
             {
                 cancel_kernel_runtime(&self.shared.kernel, runtime_id).await?;
                 let updated = self.get(runtime_id).await?;
-                publish_state(&self.shared.kernel, &updated, None);
+                publish_state(&self.shared.kernel, &updated, None).await?;
                 self.shared.changed.notify_one();
             }
         }
@@ -871,7 +871,9 @@ async fn run_claimed(
     entry: ScheduledRuntime,
     mut shutdown: watch::Receiver<bool>,
 ) {
-    publish_state(&shared.kernel, &entry, None);
+    if let Err(error) = publish_state(&shared.kernel, &entry, None).await {
+        tracing::error!(%error, runtime_id = %entry.runtime_id, "scheduler event append failed");
+    }
     let runtime = match shared.kernel.get_runtime(entry.runtime_id).await {
         Ok(runtime) => runtime,
         Err(error) => {
@@ -1008,7 +1010,9 @@ async fn run_claimed(
                 )
                 .await;
             if let Ok(Some(waiting)) = shared.store.get(entry.runtime_id).await {
-                publish_state(&shared.kernel, &waiting, None);
+                if let Err(error) = publish_state(&shared.kernel, &waiting, None).await {
+                    tracing::error!(%error, runtime_id = %waiting.runtime_id, "scheduler event append failed");
+                }
             }
         }
     }
@@ -1042,7 +1046,9 @@ async fn set_terminal(
         )
         .await;
     if let Ok(Some(entry)) = shared.store.get(old.runtime_id).await {
-        publish_state(&shared.kernel, &entry, error);
+        if let Err(error) = publish_state(&shared.kernel, &entry, error).await {
+            tracing::error!(%error, runtime_id = %entry.runtime_id, "scheduler event append failed");
+        }
     }
 }
 
@@ -1077,11 +1083,15 @@ async fn fail_or_retry(
             .unwrap_or(false)
         {
             if let Ok(Some(updated)) = shared.store.get(entry.runtime_id).await {
-                publish_state(
+                if let Err(error) = publish_state(
                     &shared.kernel,
                     &updated,
                     Some(format!("retry after {delay:?}: {message}")),
-                );
+                )
+                .await
+                {
+                    tracing::error!(%error, runtime_id = %updated.runtime_id, "scheduler event append failed");
+                }
             }
         }
     } else {
@@ -1153,7 +1163,7 @@ async fn refresh_dependencies(shared: &SchedulerShared) -> Result<()> {
                 .await?
             {
                 if let Ok(Some(updated)) = shared.store.get(entry.runtime_id).await {
-                    publish_state(&shared.kernel, &updated, Some(error));
+                    publish_state(&shared.kernel, &updated, Some(error)).await?;
                 }
             }
         } else if complete
@@ -1169,7 +1179,7 @@ async fn refresh_dependencies(shared: &SchedulerShared) -> Result<()> {
                 .await?
         {
             if let Ok(Some(updated)) = shared.store.get(entry.runtime_id).await {
-                publish_state(&shared.kernel, &updated, None);
+                publish_state(&shared.kernel, &updated, None).await?;
             }
         }
     }
@@ -1194,7 +1204,9 @@ async fn wake_parent(shared: &SchedulerShared, parent: Option<RuntimeId>) {
                     )
                     .await;
                 if let Ok(Some(updated)) = shared.store.get(parent_id).await {
-                    publish_state(&shared.kernel, &updated, None);
+                    if let Err(error) = publish_state(&shared.kernel, &updated, None).await {
+                        tracing::error!(%error, runtime_id = %updated.runtime_id, "scheduler event append failed");
+                    }
                 }
             }
         }
@@ -1235,8 +1247,12 @@ async fn timeout_kernel_runtime(kernel: &Kernel, runtime_id: RuntimeId) -> Resul
     kernel.timeout_runtime(runtime_id).await.map(|_| ())
 }
 
-fn publish_state(kernel: &Kernel, entry: &ScheduledRuntime, detail: Option<String>) {
-    let _ = kernel
+async fn publish_state(
+    kernel: &Kernel,
+    entry: &ScheduledRuntime,
+    detail: Option<String>,
+) -> Result<()> {
+    kernel
         .events()
         .publish(RuntimeEvent::SchedulerStateChanged {
             mission_id: entry.mission_id,
@@ -1246,7 +1262,8 @@ fn publish_state(kernel: &Kernel, entry: &ScheduledRuntime, detail: Option<Strin
             attempt: entry.attempt,
             detail,
             timestamp: now_millis(),
-        });
+        })
+        .await
 }
 
 async fn recover_running(shared: &SchedulerShared) -> Result<()> {
@@ -1271,7 +1288,8 @@ async fn recover_running(shared: &SchedulerShared) -> Result<()> {
                     &shared.kernel,
                     &updated,
                     Some("recovered as interrupted".into()),
-                );
+                )
+                .await?;
             }
         }
     }

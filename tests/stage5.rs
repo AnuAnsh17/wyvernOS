@@ -24,7 +24,8 @@ async fn setup(limit: usize) -> (Kernel, Scheduler, MissionId, RuntimeId, TempDi
     let mission = kernel.create_mission("scheduler tests").await.unwrap();
     let agent = kernel
         .register_agent(AgentDefinition::new("scheduled worker", AgentKind::WorkerA))
-        .await;
+        .await
+        .unwrap();
     let root = kernel
         .create_runtime(mission.id, None, &agent, "root")
         .await
@@ -48,7 +49,8 @@ async fn setup(limit: usize) -> (Kernel, Scheduler, MissionId, RuntimeId, TempDi
 async fn child(kernel: &Kernel, parent: RuntimeId, objective: &str) -> RuntimeId {
     let agent = kernel
         .register_agent(AgentDefinition::new(objective, AgentKind::WorkerA))
-        .await;
+        .await
+        .unwrap();
     kernel
         .spawn_child(parent, &agent, objective)
         .await
@@ -162,7 +164,8 @@ async fn bounded_workers_execute_concurrently_across_missions() {
     let kernel = Kernel::new_sqlite(&db).await.unwrap();
     let agent = kernel
         .register_agent(AgentDefinition::new("worker", AgentKind::WorkerA))
-        .await;
+        .await
+        .unwrap();
     let meter = Arc::new(MeteredExecutor {
         current: AtomicUsize::new(0),
         peak: AtomicUsize::new(0),
@@ -215,7 +218,8 @@ async fn independent_scheduler_instances_cannot_claim_one_runtime_twice() {
     let mission = kernel.create_mission("atomic claim").await.unwrap();
     let agent = kernel
         .register_agent(AgentDefinition::new("worker", AgentKind::WorkerA))
-        .await;
+        .await
+        .unwrap();
     let root = kernel
         .create_runtime(mission.id, None, &agent, "one claim")
         .await
@@ -300,7 +304,8 @@ async fn higher_priority_dispatches_first_and_age_prevents_starvation() {
     let mission = kernel.create_mission("priority").await.unwrap();
     let agent = kernel
         .register_agent(AgentDefinition::new("worker", AgentKind::WorkerA))
-        .await;
+        .await
+        .unwrap();
     let first = kernel
         .create_runtime(mission.id, None, &agent, "gate")
         .await
@@ -408,7 +413,8 @@ async fn dependencies_unlock_on_success_and_block_after_failure() {
     let mission = kernel.create_mission("deps").await.unwrap();
     let agent = kernel
         .register_agent(AgentDefinition::new("worker", AgentKind::WorkerA))
-        .await;
+        .await
+        .unwrap();
     let root = kernel
         .create_runtime(mission.id, None, &agent, "root")
         .await
@@ -457,7 +463,8 @@ async fn dependencies_unlock_on_success_and_block_after_failure() {
     let mission2 = kernel2.create_mission("failed deps").await.unwrap();
     let agent2 = kernel2
         .register_agent(AgentDefinition::new("worker", AgentKind::WorkerA))
-        .await;
+        .await
+        .unwrap();
     let root2 = kernel2
         .create_runtime(mission2.id, None, &agent2, "root")
         .await
@@ -531,7 +538,8 @@ async fn retry_uses_configured_backoff_and_preserves_attempt_count() {
     let mission = kernel.create_mission("retry").await.unwrap();
     let agent = kernel
         .register_agent(AgentDefinition::new("retry", AgentKind::WorkerA))
-        .await;
+        .await
+        .unwrap();
     let root = kernel
         .create_runtime(mission.id, None, &agent, "retry me")
         .await
@@ -603,7 +611,8 @@ async fn retry_exhaustion_fails_after_the_configured_attempt_budget() {
     let mission = kernel.create_mission("retry exhaustion").await.unwrap();
     let agent = kernel
         .register_agent(AgentDefinition::new("worker", AgentKind::WorkerA))
-        .await;
+        .await
+        .unwrap();
     let root = kernel
         .create_runtime(mission.id, None, &agent, "always fail")
         .await
@@ -665,7 +674,8 @@ async fn timeout_releases_slot_and_wait_resume_does_not_hold_a_worker() {
     let mission = kernel.create_mission("time slots").await.unwrap();
     let agent = kernel
         .register_agent(AgentDefinition::new("worker", AgentKind::WorkerA))
-        .await;
+        .await
+        .unwrap();
     let root = kernel
         .create_runtime(mission.id, None, &agent, "root")
         .await
@@ -752,7 +762,8 @@ async fn schedule_records_survive_restart_and_running_records_recover_as_interru
     let mission = kernel.create_mission("recover").await.unwrap();
     let agent = kernel
         .register_agent(AgentDefinition::new("worker", AgentKind::WorkerA))
-        .await;
+        .await
+        .unwrap();
     let root = kernel
         .create_runtime(mission.id, None, &agent, "root")
         .await
@@ -874,7 +885,8 @@ async fn mission_and_subtree_cancellation_leave_other_missions_untouched() {
     let mission_b = kernel.create_mission("B").await.unwrap();
     let agent = kernel
         .register_agent(AgentDefinition::new("worker", AgentKind::WorkerA))
-        .await;
+        .await
+        .unwrap();
     let root_a = kernel
         .create_runtime(mission_a.id, None, &agent, "root A")
         .await
@@ -928,7 +940,8 @@ async fn waiting_runtime_releases_its_worker_slot() {
     let mission = kernel.create_mission("waiting").await.unwrap();
     let agent = kernel
         .register_agent(AgentDefinition::new("worker", AgentKind::WorkerA))
-        .await;
+        .await
+        .unwrap();
     let root = kernel
         .create_runtime(mission.id, None, &agent, "root")
         .await
@@ -1001,7 +1014,8 @@ async fn parent_waits_for_all_children_and_failure_is_visible_before_resume() {
     let mission = kernel.create_mission("parent wait").await.unwrap();
     let agent = kernel
         .register_agent(AgentDefinition::new("worker", AgentKind::WorkerA))
-        .await;
+        .await
+        .unwrap();
     let parent = kernel
         .create_runtime(mission.id, None, &agent, "parent")
         .await
@@ -1083,7 +1097,8 @@ async fn scheduler_status_cli_reads_persisted_scheduler_snapshot() {
     let mission = kernel.create_mission("cli").await.unwrap();
     let agent = kernel
         .register_agent(AgentDefinition::new("worker", AgentKind::WorkerA))
-        .await;
+        .await
+        .unwrap();
     let runtime = kernel
         .create_runtime(mission.id, None, &agent, "cli runtime")
         .await

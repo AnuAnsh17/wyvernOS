@@ -166,7 +166,8 @@ async fn missing_behavior_is_typed_and_leaves_direct_runtime_ready() {
     let mission = kernel.create_mission("missing behavior").await.unwrap();
     let agent = kernel
         .register_agent(AgentDefinition::new("unbound", AgentKind::WorkerA))
-        .await;
+        .await
+        .unwrap();
     let runtime = kernel
         .create_runtime(mission.id, None, &agent, "unbound")
         .await
@@ -220,7 +221,8 @@ async fn scheduler_uses_the_same_behavior_executor_and_records_missing_binding()
 
     let missing_agent = kernel
         .register_agent(AgentDefinition::new("unbound", AgentKind::WorkerB))
-        .await;
+        .await
+        .unwrap();
     let missing = kernel
         .create_runtime(mission.id, None, &missing_agent, "missing")
         .await

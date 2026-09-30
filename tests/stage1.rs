@@ -33,19 +33,24 @@ async fn register_demo_agents(kernel: &Kernel) -> DemoAgents {
     DemoAgents {
         commander: kernel
             .register_agent(AgentDefinition::new("L1 Commander", AgentKind::Commander))
-            .await,
+            .await
+            .unwrap(),
         worker_a: kernel
             .register_agent(AgentDefinition::new("L2 Worker A", AgentKind::WorkerA))
-            .await,
+            .await
+            .unwrap(),
         worker_b: kernel
             .register_agent(AgentDefinition::new("L2 Worker B", AgentKind::WorkerB))
-            .await,
+            .await
+            .unwrap(),
         worker_a1: kernel
             .register_agent(AgentDefinition::new("L3 Worker A1", AgentKind::WorkerA1))
-            .await,
+            .await
+            .unwrap(),
         worker_a2: kernel
             .register_agent(AgentDefinition::new("L3 Worker A2", AgentKind::WorkerA2))
-            .await,
+            .await
+            .unwrap(),
     }
 }
 
@@ -554,7 +559,6 @@ async fn restart_recovery_loads_persisted_state() {
     assert_eq!(result.status, RuntimeOutcome::Completed);
 
     drop(kernel);
-    drop(tempdir);
 
     let reopened = Kernel::new_sqlite(&database).await.expect("reopen kernel");
     let missions = reopened.list_missions().await;
@@ -566,7 +570,13 @@ async fn restart_recovery_loads_persisted_state() {
     assert_eq!(root_runtime.state, RuntimeState::Completed);
     assert!(root_runtime.result.is_some());
 
-    let agents = register_demo_agents(&reopened).await;
+    let agents = DemoAgents {
+        commander: reopened.agent_by_kind(AgentKind::Commander).await.unwrap(),
+        worker_a: reopened.agent_by_kind(AgentKind::WorkerA).await.unwrap(),
+        worker_b: reopened.agent_by_kind(AgentKind::WorkerB).await.unwrap(),
+        worker_a1: reopened.agent_by_kind(AgentKind::WorkerA1).await.unwrap(),
+        worker_a2: reopened.agent_by_kind(AgentKind::WorkerA2).await.unwrap(),
+    };
     let new_mission = reopened
         .create_mission("post restart")
         .await
@@ -581,6 +591,7 @@ async fn restart_recovery_loads_persisted_state() {
         .await
         .expect("runtime");
     assert_ne!(new_root.id(), root_id);
+    drop(tempdir);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

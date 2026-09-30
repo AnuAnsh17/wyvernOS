@@ -49,19 +49,19 @@ pub async fn run_recursive_demo(kernel: &Kernel) -> Result<RuntimeResult> {
         .await?;
     let commander = kernel
         .register_agent(AgentDefinition::new("L1 Commander", AgentKind::Commander))
-        .await;
+        .await?;
     let _worker_a = kernel
         .register_agent(AgentDefinition::new("L2 Worker A", AgentKind::WorkerA))
-        .await;
+        .await?;
     let _worker_b = kernel
         .register_agent(AgentDefinition::new("L2 Worker B", AgentKind::WorkerB))
-        .await;
+        .await?;
     let _worker_a1 = kernel
         .register_agent(AgentDefinition::new("L3 Worker A1", AgentKind::WorkerA1))
-        .await;
+        .await?;
     let _worker_a2 = kernel
         .register_agent(AgentDefinition::new("L3 Worker A2", AgentKind::WorkerA2))
-        .await;
+        .await?;
     let root = kernel
         .create_runtime(
             mission.id,
