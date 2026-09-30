@@ -1,429 +1,156 @@
-# Wyvern
+# WyvernOS
 
-Wyvern is a local-first, AI-native orchestration and control system. It is not a chatbot, a single agent, or a single model wrapper. The project is intended to become a persistent runtime layer that coordinates specialized agent runtimes, tools, external reasoning models, local applications, browsers, terminals, IDEs, filesystems, security tools, and eventually deeper operating-system capabilities.
+WyvernOS is a local-first AI orchestration and control-plane runtime. It coordinates persistent missions and recursive runtime instances while keeping lifecycle management, context propagation, scheduling, capabilities, and persistence in deterministic software.
 
-This repository includes the Stage 1 runtime kernel and hardening, Stage 2 context and event infrastructure, Stage 3 scoped memory, Stage 4 capability boundaries, and the Stage 5 local scheduler. Runtime execution remains model-agnostic and uses deterministic state transitions, explicit context/memory propagation, and bounded asynchronous workers.
+WyvernOS is not an LLM. Models are external decision or reasoning providers. The runtime kernel owns identity, lifecycle, hierarchy, persistence, scheduling, context and memory boundaries, capability boundaries, decision validation and application, behavior execution, and event history. This repository implements the control-plane foundations through Stage 6D; it does not yet include model routing or Laya.
 
-The capability layer defines typed capability and tool descriptors, scoped permissions, request/result lifecycles, and an auditable executor boundary. `mock.echo` is an in-process test capability; no operating-system or browser automation is implemented. Capability results enter context or scoped memory only through explicit caller selection.
+## Architectural model
 
-## Vision
+An **Agent Definition** is a reusable identity and role to which a behavior can be bound. A **Runtime** is one concrete execution instance of an agent, with its own objective, mission, lifecycle state, parent/child relationships, and result.
 
-Wyvern aims to become a command-and-control layer for software work and system work on a local machine. The long-term goal is a deterministic orchestration kernel that can manage many logical runtimes concurrently while routing reasoning, tool use, and external agent delegation through explicit abstractions.
+```text
+Agent Definition ──bound to──> Runtime Behavior
+                                    │
+Mission ──> Root Runtime ──> Child Runtime(s)
+                  │                 │
+                  ├── local context and selected inherited context
+                  ├── selected memory and capability results
+                  ├── decision proposal ──> Kernel validation/application
+                  └── execution and structured results
+```
 
-The system should be able to:
+The kernel controls runtime state transitions. A `DecisionEngine` receives a typed request with explicit options and selected context, and proposes a result. The kernel checks the proposal and applies supported lifecycle decisions. A `RuntimeBehavior` runs through a bounded runtime handle and can request work through the kernel; it does not own lifecycle state.
 
-- receive user commands
-- manage multiple missions at once
-- spawn and supervise recursive child runtimes
-- compile task-specific context rather than exposing global state indiscriminately
-- keep memory scoped and provenance-aware
-- coordinate decision-making separately from reasoning
-- expose live status through a TUI and CLI
-- evolve toward a Linux-native control plane without requiring a rewrite
-
-## Core Architectural Concepts
-
-Wyvern is built around a persistent root runtime and recursively spawned child runtimes.
-
-Agent Definition
-→ Runtime Instance
-→ Objective
-→ Context
-→ Decision
-→ Tools / Child Runtimes
-→ Observation
-→ State Update
-→ Memory Update
-→ Result
-→ Parent Runtime
-→ Termination
-
-The same runtime implementation should be able to operate at L1, L2, L3, L4, and deeper levels. A runtime may finish its task directly or spawn children if additional workforce is needed.
-
-### Agent vs Runtime
-
-An agent is a reusable role or capability definition. A runtime is a concrete execution instance of an agent working against a specific objective within a specific context and mission.
-
-This distinction matters because agents are reusable definitions, while runtimes are ephemeral executions with state, progress, events, and lineage.
-
-### Recursive Runtime Hierarchy
-
-Example hierarchy:
+The main persistence and event paths are:
 
 ```mermaid
 flowchart TD
-    L1[L1 Security Commander]
-    L2A[L2 Recon]
-    L2B[L2 Authentication]
-    L2C[L2 Reporting]
-    L3A[L3 Endpoint Discovery]
-    L3B[L3 Parameter Analysis]
-    L3C[L3 Technology Detection]
-    L3D[L3 Session Analysis]
-    L3E[L3 Authorization]
-
-    L1 --> L2A
-    L1 --> L2B
-    L1 --> L2C
-    L2A --> L3A
-    L2A --> L3B
-    L2A --> L3C
-    L2B --> L3D
-    L2B --> L3E
+    M[Mission] --> R[Runtime hierarchy]
+    A[Persisted Agent Definitions] --> R
+    R --> B[Registered Runtime Behavior]
+    B --> D[DecisionEngine proposal]
+    D --> K[Kernel validates and applies]
+    K --> S[(SQLite state stores)]
+    K --> E[RuntimeEvent]
+    E --> V[EventEnvelope]
+    V --> H[(SQLite event history)]
+    V --> L[Live EventBus subscribers]
 ```
 
-Child runtimes report structured results to their immediate parent. Parents synthesize relevant state and propagate only what matters upward.
+SQLite backs mission, agent, runtime, event, context, memory, and scheduler records. These stores share a local database path in the SQLite-backed Kernel setup, but their updates are not one transactionally unified operation.
 
-## Context Compiler
+## Implemented stages
 
-Context is hierarchical and dynamically compiled. A runtime should receive only the information relevant to its responsibility.
+### Stage 1 — Runtime Kernel
 
-The context compiler may draw from:
+Implemented typed mission, runtime, and agent IDs; lifecycle state validation; mission tracking; recursive parent/child runtimes; concurrent execution; cancellation and failure handling; SQLite persistence and startup hydration; runtime events; a deterministic demo executor; and CLI inspection.
 
-- parent objective
-- runtime objective
-- branch state
-- mission state
-- prior attempts
-- findings
-- dependencies
-- artifacts
-- constraints
-- capabilities
-- permissions
-- relevant memory
-- relevant child results
+### Stage 2 — Context and State Infrastructure
 
-The compiler must not blindly provide the entire global state to an LLM.
+`RuntimeContext` is separate from machine execution state. `ContextCompiler` deterministically assembles explicitly supplied inputs, including runtime state, local facts, selected inherited facts, events, child outputs, constraints, metadata, selected memories, and capability results. Context items retain provenance. Context is branch-local, stored by runtime, and has persisted versioned snapshots. Child results and inherited context are passed explicitly; they do not become global context automatically.
 
-## Memory Architecture
+### Stage 3 — Scoped Memory
 
-Memory must be scoped. Operational details should not automatically become permanent knowledge, and important findings must preserve provenance and lineage.
+Memory is typed, durable structured state with scope, provenance, status, and lifecycle operations such as superseding, invalidating, archiving, and promotion. Runtimes receive memory only when a caller explicitly selects it into context. This is not vector or semantic memory: there are no embeddings, semantic search, or automatic summaries.
 
-Planned memory scopes include:
+### Stage 4 — Capability Boundary
 
-- runtime memory
-- branch memory
-- mission memory
-- reusable/global knowledge
+The capability module provides typed capability, tool, and request IDs; descriptors with input/output schemas and risk metadata; a registry and executor interface; typed requests and results; and request lifecycle events. Callers explicitly select results for context or convert successful results into memory drafts.
 
-Memory entries should carry:
+`CapabilityPermission` checks are supplied by the caller. There is no durable authorization or grant subsystem, so production authorization and security enforcement are not complete. `mock.echo` is a test executor; no production browser, filesystem, process, network, model, or OS executor is registered by default.
 
-- scope
-- source runtime
-- timestamp
-- relevance
-- confidence where appropriate
-- evidence or artifact references
-- relationship to mission or branch
+### Stage 5 — Scheduler
 
-Negative results matter too. If a child runtime proves a hypothesis false within a branch, that result should be recorded with evidence so that sibling work does not repeat the same failure unnecessarily.
+The local scheduler coordinates existing runtimes using bounded asynchronous workers, persistent queue state, deterministic priority with age-based fairness, dependencies, retry budgets with backoff, waiting and resume, cancellation, timeout handling, and scheduler events. SQLite claims use conditional state updates. On restart, work left in `Running` is marked interrupted rather than automatically resumed. This is a local scheduler, not a distributed service.
 
-## Event Architecture
+### Stage 6A — Model-Agnostic Decision Engine
 
-Wyvern should be event-driven. Events are the primary mechanism for runtime coordination, live UI updates, observability, auditability, recovery, and parent/child synchronization.
+The `DecisionEngine` trait accepts typed `DecisionRequest` values and returns typed `DecisionResult` proposals with engine provenance. Requests define the available options and explicitly selected context. `MockDecisionEngine` is deterministic. The engine proposes; it does not own or mutate runtime state.
 
-Planned event types include:
+### Stage 6B — Bounded Decision Application
 
-- runtime.created
-- runtime.started
-- runtime.waiting
-- runtime.progress
-- runtime.spawned_child
-- runtime.tool_called
-- runtime.tool_completed
-- runtime.reasoning_requested
-- runtime.reasoning_completed
-- runtime.memory_updated
-- runtime.failed
-- runtime.completed
-- runtime.cancelled
+The kernel currently applies the bounded `RuntimeLifecycle` decision type. It validates that the selected option was offered, that the requested transition is legal, and that the runtime has not changed since the request was built. State application uses a compare-and-set check over lifecycle state and `updated_at`. Results distinguish accepted applications from rejected or stale proposals. Decision application remains kernel-controlled.
 
-## Decision vs Reasoning
+### Stage 6C — Pluggable Agent Behavior
 
-Wyvern should not make every decision through an LLM.
+`RuntimeBehavior` implementations are registered in a `RuntimeBehaviorRegistry` and resolved by `AgentId`. Behaviors receive a bounded `BehaviorRuntimeHandle`; direct and scheduled execution use the same behavior-backed executor path. The kernel retains lifecycle authority. The repository includes deterministic Commander and Worker demo behaviors. Behavior implementations are in-process and are not persisted as executable objects; after restart, the current process must provide behavior registrations (kind defaults can be rebound during hydration).
 
-The runtime should have a deterministic decision layer for frequent, cheap control-flow choices such as continue, wait, retry, spawn, skip, escalate, and terminate. More complex reasoning should be delegated through a model routing interface.
+### Stage 6D — Durable Agent Identity and Event Log
 
-## Laya
+**Agent identity:** SQLite stores `agent_id`, `name`, `kind`, and `created_at`. Startup hydrates agent definitions before missions and runtimes. A recovered runtime must resolve its persisted `AgentId`; a missing identity produces a typed error. WyvernOS rejects duplicate agent IDs and does not synthesize replacement agents during recovery.
 
-Laya is the planned fast local decision component. It should eventually handle cheap, frequent decisions and deterministic branching while remaining separate from reasoning logic.
+**Event history:** With persistent storage configured, publishing a `RuntimeEvent` creates an `EventEnvelope`, appends it to SQLite, and then broadcasts it to live subscribers. The envelope includes a typed UUIDv7 `EventId`, event type, timestamp, mission ID, runtime ID, parent runtime ID, and typed serialized event payload. The SQLite row also receives an ordered `sequence_id`. Recovery validates that persisted envelope metadata agrees with its payload.
 
-## Model Router
+The kernel exposes history queries for all persisted events, one runtime, or one mission. `EventBus` remains the live asynchronous broadcast mechanism; the durable event log is a separate historical inspection mechanism.
 
-The runtime must never hard-code a specific model. Reasoning requests should go through a model router that can select providers according to policy.
+## Context, memory, and events
 
-Potential provider policies include:
+These concepts have separate roles:
 
-- cheap / fast reasoning
-- complex reasoning
-- coding
-- vision
-- research
-- security reasoning
-- local inference
-- cloud inference
+| Component | Role |
+| --- | --- |
+| Runtime state | Machine-readable execution identity, hierarchy, lifecycle, and result |
+| Context | A runtime-specific projection of explicitly selected information |
+| Memory | Durable, scoped structured records that may be selected into context |
+| EventBus | Live asynchronous event delivery to subscribers |
+| Event log | Durable ordered event history for inspection |
 
-## Tools
+The compiler is deterministic and has no hidden global lookup. Sibling branches do not see each other’s local context unless a commanding runtime explicitly propagates information. Context snapshots are immutable records with per-runtime versions and optional parent-snapshot metadata.
 
-Wyvern should operate existing local software rather than reinventing everything. Agents should interact with controlled tool interfaces rather than coupling directly to terminals, browsers, filesystems, or applications.
+## Persistence and recovery
 
-Planned future tools include:
+The SQLite-backed kernel stores missions, agents, runtimes and results, event history, context and snapshots, memory records, and scheduler state. Startup hydration follows dependency order:
 
-- filesystem
-- terminal
-- browser
-- browser tabs
-- HTTP
-- Git
-- process management
-- screenshots
-- IDE control
-- application control
-- security tools
-- OS APIs
-
-## Skills
-
-Skills are reusable task-specific capability packages. They are not necessarily custom models; they are role and capability definitions that can load tools and reasoning providers at runtime.
-
-Examples include:
-
-- browser automation
-- web research
-- software development
-- Python development
-- Rust development
-- SQL analysis
-- security reconnaissance
-- vulnerability validation
-- report writing
-- academic research
-- IDE operation
-- Antigravity operation
-
-## External Agent Integration
-
-Wyvern should eventually be able to command other agent-capable software instead of reproducing every subsystem itself.
-
-Conceptually:
-
-```mermaid
-flowchart LR
-    W[Wyvern Runtime] --> S[Software Development Agent]
-    S --> A[Antigravity Controller]
-    A --> B[Antigravity Agent / Model]
-    B --> P[Local Project]
-    P --> R[Result]
-    R --> W
+```text
+Agents → Missions → Runtimes → runtime hierarchy and context
 ```
 
-Browser work should likewise use browser-specific agents or tools rather than the root runtime directly manipulating every browser operation.
+Agents load first because runtimes refer to them by `AgentId`. Runtime records remain the source used to recover runtime state; the event log is not replayed to reconstruct state. Runtime state writes and event-log appends are separate persistence operations, not one atomic transaction. This design provides local durable records, not transactional guarantees across every subsystem.
 
-## TUI Vision
+## Current boundaries
 
-Wyvern should eventually provide a TUI, not only a command line interface. The TUI should subscribe to orchestration state and events rather than duplicating the orchestration logic.
+Stages 1–6D establish local orchestration infrastructure. They do not implement event sourcing or replay-driven state reconstruction, atomic runtime-state/event commits, distributed event storage, distributed runtimes, multi-node orchestration, or persistent executable behavior objects and dynamic behavior loading. Model routing, Laya, real browser automation, production tool execution, and durable authorization are also outside the current implementation.
 
-Planned views include:
+The decision and behavior interfaces are extension points, not model integrations. The capability boundary is not a complete security system. The project is not an operating-system kernel and does not provide unrestricted computer control.
 
-- branding and header
-- command input
-- active missions
-- active runtimes
-- runtime hierarchy
-- agent status
-- live event stream
-- CPU, RAM, GPU, VRAM, and network activity
-- runtime counts
-- model / API activity
-- mission state
+## Roadmap
 
-The CLI should remain available for scripting and automation.
+Stages 1–6D are implemented. The repository roadmap’s next planned work remains:
 
-## OS Evolution
+1. **Model Router:** provider abstraction and policy-driven selection of external reasoning providers.
+2. **Laya Integration:** a fast decision provider kept separate from reasoning.
+3. **TUI:** a view over missions, runtime hierarchy, agents, events, and system status.
+4. **Browser and application control:** controlled integration boundaries for browsers and local applications.
+5. **Skills and advanced agents:** reusable task packages and higher-level agent roles.
+6. **Reliability and OS integration:** further recovery, checkpointing, permission, isolation, and Linux integration work.
 
-Wyvern is intended to begin as a control plane on an existing operating system and later evolve toward a deeply integrated Linux environment. Linux remains the underlying operating system; Wyvern is not a kernel project.
+These are roadmap items, not implemented capabilities. See [ROADMAP.md](ROADMAP.md) and [ARCHITECTURE.md](ARCHITECTURE.md) for project planning and component boundaries.
 
-Planned progression:
+## Tests
 
-1. Wyvern runtime on an existing OS
-2. Wyvern as a deeply integrated Linux environment
-3. Wyvern-oriented Linux distribution or AI-native OS environment
+Stage-specific integration tests cover the implemented architecture from the runtime kernel through Stage 6D. Stage 6D tests exercise agent persistence and identity preservation, runtime hierarchy recovery, duplicate-agent rejection, event persistence and ordering, unique event IDs, runtime and mission filters, and persisted decision events. Other stage tests cover context and snapshot behavior, scoped memory, capability requests, scheduler coordination, decision validation, and behavior execution.
 
-System-specific behavior should be isolated behind adapters such as:
+Run the Rust checks and test suite with:
 
-```mermaid
-flowchart TD
-    SA[SystemAdapter]
-    W[WindowsAdapter]
-    L[LinuxAdapter]
-    F[TBD: future WyvernOSAdapter]
-
-    SA --> W
-    SA --> L
-    SA --> F
+```bash
+cargo fmt --check
+cargo check
+cargo test
 ```
 
-## Security Principles
+The project is under active development; tests describe current contracts and do not imply production readiness or distributed-operation guarantees.
 
-Security is a first-class architectural concern, but v0.1 is not intended to include a full production security stack.
+## Repository layout
 
-Principles for the project:
-
-- favor explicit permissions over implicit access
-- isolate tools behind controlled interfaces
-- scope memory and context carefully
-- preserve provenance for important facts
-- keep risky capabilities behind clear boundaries
-- use deterministic control flow whenever possible
-- treat external reasoning and external agents as untrusted boundaries unless explicitly constrained
-
-## Development Philosophy
-
-Wyvern should be built as a small reliable kernel first.
-
-The most important principle is that Wyvern's fundamental behavior should be deterministic software wherever possible. LLMs should provide reasoning where reasoning is required, not replace lifecycle management, scheduling, persistence, event handling, or communication.
-
-Do not add abstractions just because the system might scale in theory. Build the minimum coherent orchestration kernel first, then expand carefully.
-
-## Stage Roadmap
-
-Stage 0 is completed, Stage 1 is implemented, and Stage 1A is completed.
-
-### Stage 0 - Repository / Architecture
-
-Status: COMPLETED.
-
-Create the repository structure, documentation, architecture diagrams, contracts, design decisions, and development rules.
-
-### Stage 1 - Runtime Kernel
-
-Status: IMPLEMENTED.
-
-Implemented capabilities:
-
-- typed Mission, Runtime, and Agent IDs
-- persistent-safe UUID-based IDs with human-readable prefixes
-- runtime lifecycle state machine
-- recursive parent/child hierarchy
-- concurrent runtime execution
-- multi-mission support
-- failure handling
-- cancellation
-- SQLite persistence for missions, runtimes, and results
-- restart/recovery hydration from SQLite
-- runtime event publication
-- deterministic demo executor
-- CLI inspection for missions and runtimes
-
-### Stage 1A - Runtime Kernel Hardening
-
-Status: COMPLETED.
-
-Validated by tests covering:
-
-- lifecycle transitions
-- restart-safe IDs
-- parent/child integrity
-- cross-mission rejection
-- recursive tree execution
-- concurrent missions and concurrent queries
-- failure propagation
-- cancellation
-- event publication to multiple subscribers
-- restart recovery hydration
-- CLI inspection and recursive demo output
-
-### Stage 2 - Context, State & Event Infrastructure
-
-Status: IMPLEMENTED. Provides branch-local context, deterministic compilation, context snapshots, and machine-readable live events.
-
-### Stage 3 - Scoped Memory
-
-Status: IMPLEMENTED. Provides typed, scoped, provenance-aware memory with durable SQLite history.
-
-### Stage 4 - Capability / Tool Boundary
-
-Status: IMPLEMENTED. Defines typed capabilities, tools, requests/results, permissions, events, and a test-only `mock.echo` executor. No real computer-control tools are included.
-
-### Stage 5 - Scheduler / Execution Coordinator
-
-Status: IMPLEMENTED. Coordinates existing runtimes through bounded workers, atomic claims, priority/fairness, dependencies, waiting, retries, timeouts, cancellation, durable scheduling state, and inspection. Scheduling is deterministic and does not perform reasoning.
-
-### Stage 6 - Model Router
-
-Add provider abstraction and policy-driven reasoning provider selection. No model is hard-coded into the runtime engine.
-
-### Stage 7 - Laya Integration
-
-Add Laya as a fast decision provider while keeping decision logic separate from reasoning logic.
-
-### Stage 8 - TUI
-
-Build the Ratatui interface with mission view, runtime tree, agent view, event stream, system monitoring, model activity, and command input.
-
-### Stage 9 - Browser / Application Control
-
-Add controlled interfaces for browser, tabs, filesystem, IDEs, and applications.
-
-### Stage 10 - Skills
-
-Create the skill registry and skill loading system.
-
-### Stage 11 - Advanced Agents
-
-Build reusable agent definitions for research, coding, browser automation, security, academic work, reporting, and validation.
-
-### Stage 12 - Reliability
-
-Implement retries, crash recovery, runtime restoration, cancellation, timeouts, dependency handling, checkpointing, graceful shutdown, and mission resumption.
-
-### Stage 13 - Deep OS Integration
-
-After the core architecture is stable, add Linux system integration, process management, sandboxing, permissions, resource control, isolation, and system services.
-
-### Stage 14 - Wyvern Linux Environment
-
-Explore a minimal Linux environment or distribution where Wyvern becomes the primary AI orchestration and control layer.
-
-## Non-Goals for v0.1
-
-Wyvern v0.1 will not attempt to build:
-
-- a custom LLM
-- an operating system
-- a kernel
-- a full desktop environment
-- hundreds of agents
-- every browser integration
-- every IDE integration
-- distributed cloud infrastructure
-- autonomous unrestricted computer control
-- complex production security infrastructure
-
-The goal is to prove the runtime kernel.
-
-## Current Status
-
-Stage 0 - Repository / Architecture: COMPLETED
-Stage 1 - Runtime Kernel: IMPLEMENTED
-Stage 1A - Runtime Kernel Hardening: COMPLETED
-Stage 2 - Context, State & Event Infrastructure: IMPLEMENTED
-Stage 3 - Scoped Memory: IMPLEMENTED
-Stage 4 - Capability / Tool Boundary: IMPLEMENTED
-Stage 5 - Scheduler / Execution Coordinator: IMPLEMENTED
-
-The runtime kernel, branch-local context, scoped memory, capability boundary, and local scheduler are implemented and validated. Model routing, Laya, and the TUI remain planned.
-
-## Future Architecture Diagrams
-
-Future documentation should expand with diagrams for:
-
-- runtime lifecycle state transitions
-- event propagation and subscriptions
-- context compilation flow
-- memory scope relationships
-- model routing policy selection
-- tool access boundaries
-- TUI data flow
-- mission / runtime hierarchy
+```text
+src/
+  behavior/     Runtime behavior interface, registry, and deterministic demos
+  capability/  Capability and tool descriptors, registry, and executor boundary
+  context/      Runtime context compiler, store, and snapshots
+  decision/     Typed decision requests, results, and engine interface
+  memory/       Scoped durable structured memory
+  persistence.rs SQLite persistence contracts and runtime store
+  scheduler.rs  Local bounded execution coordinator
+  kernel.rs     Runtime hierarchy, lifecycle, and subsystem coordination
+tests/          Stage-specific integration tests
+```
