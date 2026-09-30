@@ -1,4 +1,9 @@
 use crate::agent::{AgentDefinition, AgentKind};
+use crate::behavior::demo::RuntimeHooks;
+use crate::behavior::{
+    BehaviorError, BehaviorRuntimeHandle, ChildRuntimeRunner, RuntimeBehavior,
+    RuntimeBehaviorRegistry, RuntimeExecutionContext,
+};
 use crate::capability::{
     CapabilityCancellation, CapabilityPermission, CapabilityRegistry, CapabilityRequest,
     CapabilityResult,
@@ -16,14 +21,15 @@ use crate::error::{Result, WyvernError};
 use crate::events::{EventBus, RuntimeEvent};
 use crate::memory::{MemoryDraft, MemoryItem, MemoryStore};
 use crate::persistence::{RuntimeStore, SqliteRuntimeStore};
-use crate::result::RuntimeResult;
-use async_recursion::async_recursion;
+use crate::result::{RuntimeOutcome, RuntimeResult};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-use tokio::sync::{watch, Barrier, Mutex, Notify, RwLock};
+use tokio::sync::{watch, Mutex, RwLock};
+
+use crate::scheduler::{RuntimeExecutionError, ScheduledRuntimeExecutor};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Runtime {
@@ -217,22 +223,33 @@ struct KernelInner {
     pub context_store: ContextStore,
     pub memory_store: MemoryStore,
     pub decision_engine: Option<Arc<dyn DecisionEngine>>,
+    pub behavior_registry: RuntimeBehaviorRegistry,
     pub controls: RwLock<HashMap<RuntimeId, watch::Sender<bool>>>,
     lifecycle_locks: RwLock<HashMap<RuntimeId, Arc<Mutex<()>>>>,
 }
 
 impl Kernel {
     pub async fn new(store: Arc<dyn RuntimeStore>) -> Result<Self> {
+        let behavior_registry = crate::behavior::demo::registry_with_demo_behaviors().await?;
         let context_store = ContextStore::in_memory().await?;
         let events = EventBus::new(1024);
         let memory_store = MemoryStore::in_memory(events.clone()).await?;
-        Self::new_with_stores(store, context_store, memory_store, events, None).await
+        Self::new_with_stores(
+            store,
+            context_store,
+            memory_store,
+            events,
+            None,
+            behavior_registry,
+        )
+        .await
     }
 
     pub async fn new_with_decision_engine(
         store: Arc<dyn RuntimeStore>,
         decision_engine: Arc<dyn DecisionEngine>,
     ) -> Result<Self> {
+        let behavior_registry = crate::behavior::demo::registry_with_demo_behaviors().await?;
         let context_store = ContextStore::in_memory().await?;
         let events = EventBus::new(1024);
         let memory_store = MemoryStore::in_memory(events.clone()).await?;
@@ -242,6 +259,7 @@ impl Kernel {
             memory_store,
             events,
             Some(decision_engine),
+            behavior_registry,
         )
         .await
     }
@@ -252,6 +270,7 @@ impl Kernel {
         memory_store: MemoryStore,
         events: EventBus,
         decision_engine: Option<Arc<dyn DecisionEngine>>,
+        behavior_registry: RuntimeBehaviorRegistry,
     ) -> Result<Self> {
         let capabilities = CapabilityRegistry::new(events.clone());
         let kernel = Self {
@@ -265,6 +284,7 @@ impl Kernel {
                 context_store,
                 memory_store,
                 decision_engine,
+                behavior_registry,
                 controls: RwLock::new(HashMap::new()),
                 lifecycle_locks: RwLock::new(HashMap::new()),
             }),
@@ -274,17 +294,27 @@ impl Kernel {
     }
 
     pub async fn new_sqlite(path: impl AsRef<Path>) -> Result<Self> {
+        let behavior_registry = crate::behavior::demo::registry_with_demo_behaviors().await?;
         let store = SqliteRuntimeStore::open(&path).await?;
         let context_store = ContextStore::open(&path).await?;
         let events = EventBus::new(1024);
         let memory_store = MemoryStore::open(&path, events.clone()).await?;
-        Self::new_with_stores(Arc::new(store), context_store, memory_store, events, None).await
+        Self::new_with_stores(
+            Arc::new(store),
+            context_store,
+            memory_store,
+            events,
+            None,
+            behavior_registry,
+        )
+        .await
     }
 
     pub async fn new_sqlite_with_decision_engine(
         path: impl AsRef<Path>,
         decision_engine: Arc<dyn DecisionEngine>,
     ) -> Result<Self> {
+        let behavior_registry = crate::behavior::demo::registry_with_demo_behaviors().await?;
         let store = SqliteRuntimeStore::open(&path).await?;
         let context_store = ContextStore::open(&path).await?;
         let events = EventBus::new(1024);
@@ -295,6 +325,44 @@ impl Kernel {
             memory_store,
             events,
             Some(decision_engine),
+            behavior_registry,
+        )
+        .await
+    }
+
+    pub async fn new_with_behavior_registry(
+        store: Arc<dyn RuntimeStore>,
+        behavior_registry: RuntimeBehaviorRegistry,
+    ) -> Result<Self> {
+        let context_store = ContextStore::in_memory().await?;
+        let events = EventBus::new(1024);
+        let memory_store = MemoryStore::in_memory(events.clone()).await?;
+        Self::new_with_stores(
+            store,
+            context_store,
+            memory_store,
+            events,
+            None,
+            behavior_registry,
+        )
+        .await
+    }
+
+    pub async fn new_sqlite_with_behavior_registry(
+        path: impl AsRef<Path>,
+        behavior_registry: RuntimeBehaviorRegistry,
+    ) -> Result<Self> {
+        let store = SqliteRuntimeStore::open(&path).await?;
+        let context_store = ContextStore::open(&path).await?;
+        let events = EventBus::new(1024);
+        let memory_store = MemoryStore::open(&path, events.clone()).await?;
+        Self::new_with_stores(
+            Arc::new(store),
+            context_store,
+            memory_store,
+            events,
+            None,
+            behavior_registry,
         )
         .await
     }
@@ -305,6 +373,10 @@ impl Kernel {
 
     pub fn memories(&self) -> MemoryStore {
         self.inner.memory_store.clone()
+    }
+
+    pub fn behavior_registry(&self) -> &RuntimeBehaviorRegistry {
+        &self.inner.behavior_registry
     }
 
     pub fn capabilities(&self) -> CapabilityRegistry {
@@ -1021,7 +1093,40 @@ impl Kernel {
     }
 
     pub async fn register_agent(&self, agent: AgentDefinition) -> AgentDefinition {
-        self.inner.agents.register(agent).await
+        let agent = self.inner.agents.register(agent).await;
+        self.inner
+            .behavior_registry
+            .bind_agent_default(agent.id, agent.kind)
+            .await;
+        agent
+    }
+
+    pub async fn register_agent_with_behavior(
+        &self,
+        agent: AgentDefinition,
+        behavior: Arc<dyn RuntimeBehavior>,
+    ) -> Result<AgentDefinition> {
+        if self.inner.agents.get(agent.id).await.is_some() {
+            return Err(BehaviorError::AgentAlreadyRegistered(agent.id).into());
+        }
+        self.inner
+            .behavior_registry
+            .register_for_agent(agent.id, behavior)
+            .await?;
+        Ok(self.inner.agents.register(agent).await)
+    }
+
+    pub async fn register_behavior(
+        &self,
+        agent_id: crate::agent::AgentId,
+        behavior: Arc<dyn RuntimeBehavior>,
+    ) -> Result<()> {
+        self.agent(agent_id).await?;
+        self.inner
+            .behavior_registry
+            .register_for_agent(agent_id, behavior)
+            .await?;
+        Ok(())
     }
 
     pub async fn agent_by_kind(&self, kind: AgentKind) -> Result<AgentDefinition> {
@@ -1316,6 +1421,49 @@ impl Kernel {
         Ok(runtime)
     }
 
+    async fn finalize_behavior_result(&self, result: &RuntimeResult) -> Result<()> {
+        let runtime = self.get_runtime(result.runtime_id).await?;
+        match result.status {
+            RuntimeOutcome::Completed => {
+                if runtime.state == RuntimeState::Completed {
+                    return Ok(());
+                }
+                if let Err(error) = self
+                    .complete_runtime(result.runtime_id, result.clone())
+                    .await
+                {
+                    if self.get_runtime(result.runtime_id).await?.state != RuntimeState::Completed {
+                        return Err(error);
+                    }
+                }
+            }
+            RuntimeOutcome::Failed => {
+                if runtime.state == RuntimeState::Failed {
+                    return Ok(());
+                }
+                if let Err(error) = self
+                    .fail_runtime(result.runtime_id, result.summary.clone())
+                    .await
+                {
+                    if self.get_runtime(result.runtime_id).await?.state != RuntimeState::Failed {
+                        return Err(error);
+                    }
+                }
+            }
+            RuntimeOutcome::Cancelled => {
+                if runtime.state == RuntimeState::Cancelled {
+                    return Ok(());
+                }
+                if let Err(error) = self.cancel_runtime(result.runtime_id).await {
+                    if self.get_runtime(result.runtime_id).await?.state != RuntimeState::Cancelled {
+                        return Err(error);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub async fn fail_runtime(
         &self,
         runtime_id: RuntimeId,
@@ -1444,87 +1592,11 @@ impl Kernel {
     }
 
     pub async fn demo_recursive(&self) -> Result<RuntimeResult> {
-        let mission = self
-            .create_mission("Perform recursive runtime orchestration demo")
-            .await?;
-
-        let commander = self
-            .register_agent(AgentDefinition::new("L1 Commander", AgentKind::Commander))
-            .await;
-        let _worker_a = self
-            .register_agent(AgentDefinition::new("L2 Worker A", AgentKind::WorkerA))
-            .await;
-        let _worker_b = self
-            .register_agent(AgentDefinition::new("L2 Worker B", AgentKind::WorkerB))
-            .await;
-        let worker_a1 = self
-            .register_agent(AgentDefinition::new("L3 Worker A1", AgentKind::WorkerA1))
-            .await;
-        let worker_a2 = self
-            .register_agent(AgentDefinition::new("L3 Worker A2", AgentKind::WorkerA2))
-            .await;
-
-        let root = self
-            .create_runtime(
-                mission.id,
-                None,
-                &commander,
-                "Coordinate recursive runtime demo",
-            )
-            .await?;
-
-        let _ = (worker_a1, worker_a2);
-        let barrier = Arc::new(Barrier::new(2));
-        let hooks = RuntimeHooks::recursive_demo(barrier);
-        self.executor().run(root.id(), hooks).await
+        crate::behavior::demo::run_recursive_demo(self).await
     }
 
     fn publish(&self, event: RuntimeEvent) -> Result<()> {
         self.inner.events.publish(event)
-    }
-}
-
-#[derive(Clone, Default)]
-pub struct RuntimeHooks {
-    pub root_barrier: Option<Arc<Barrier>>,
-    pub level_two_barrier: Option<Arc<Barrier>>,
-    pub failure_kinds: HashSet<AgentKind>,
-    pub pause_gate: Option<Arc<PauseGate>>,
-}
-
-impl RuntimeHooks {
-    pub fn recursive_demo(barrier: Arc<Barrier>) -> Self {
-        Self {
-            level_two_barrier: Some(barrier),
-            ..Self::default()
-        }
-    }
-
-    pub fn with_root_barrier(mut self, barrier: Arc<Barrier>) -> Self {
-        self.root_barrier = Some(barrier);
-        self
-    }
-
-    pub fn with_failure_kind(mut self, kind: AgentKind) -> Self {
-        self.failure_kinds.insert(kind);
-        self
-    }
-
-    pub fn with_pause_gate(mut self, gate: Arc<PauseGate>) -> Self {
-        self.pause_gate = Some(gate);
-        self
-    }
-}
-
-#[derive(Default)]
-pub struct PauseGate {
-    pub started: Notify,
-    pub release: Notify,
-}
-
-impl PauseGate {
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self::default())
     }
 }
 
@@ -1534,10 +1606,46 @@ pub struct RuntimeExecutor {
 }
 
 impl RuntimeExecutor {
-    #[async_recursion]
-    pub async fn run(&self, runtime_id: RuntimeId, hooks: RuntimeHooks) -> Result<RuntimeResult> {
-        let mut cancel_rx = self.kernel.cancellation_receiver(runtime_id).await?;
-        if *cancel_rx.borrow() {
+    pub async fn run(&self, runtime_id: RuntimeId) -> Result<RuntimeResult> {
+        self.run_with_hooks(runtime_id, RuntimeHooks::default())
+            .await
+    }
+
+    pub async fn run_with_hooks(
+        &self,
+        runtime_id: RuntimeId,
+        hooks: RuntimeHooks,
+    ) -> Result<RuntimeResult> {
+        let cancellation = self.kernel.cancellation_receiver(runtime_id).await?;
+        let result = match self
+            .execute_behavior(runtime_id, cancellation, hooks, false)
+            .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                if let Ok(runtime) = self.kernel.get_runtime(runtime_id).await {
+                    if matches!(runtime.state, RuntimeState::Running | RuntimeState::Waiting) {
+                        let _ = self
+                            .kernel
+                            .fail_runtime(runtime_id, error.to_string())
+                            .await;
+                    }
+                }
+                return Err(error);
+            }
+        };
+        self.kernel.finalize_behavior_result(&result).await?;
+        Ok(result)
+    }
+
+    async fn execute_behavior(
+        &self,
+        runtime_id: RuntimeId,
+        cancellation: watch::Receiver<bool>,
+        hooks: RuntimeHooks,
+        started_by_scheduler: bool,
+    ) -> Result<RuntimeResult> {
+        if *cancellation.borrow() {
             return Ok(RuntimeResult::cancelled(
                 runtime_id,
                 "runtime cancelled before start",
@@ -1545,318 +1653,81 @@ impl RuntimeExecutor {
                 Vec::new(),
             ));
         }
-
-        let runtime = self.kernel.get_runtime(runtime_id).await?;
-        self.kernel.publish(RuntimeEvent::RuntimeStarted {
-            mission_id: runtime.mission_id,
-            runtime_id,
-            parent_id: runtime.parent_id,
-            agent_id: runtime.agent_id,
-            timestamp: now_millis(),
-        })?;
-        self.kernel
-            .transition_runtime(runtime_id, RuntimeState::Running)
-            .await?;
-
-        let agent = self.kernel.agent(runtime.agent_id).await?;
-        match agent.kind {
-            AgentKind::Commander => self.run_commander(runtime_id, hooks, &mut cancel_rx).await,
-            AgentKind::WorkerA => self.run_worker_a(runtime_id, hooks, &mut cancel_rx).await,
-            AgentKind::WorkerB => self.run_worker_b(runtime_id, hooks, &mut cancel_rx).await,
-            AgentKind::WorkerA1 | AgentKind::WorkerA2 => {
-                self.run_leaf(runtime_id, hooks, &mut cancel_rx).await
-            }
-        }
-    }
-
-    #[async_recursion]
-    async fn run_commander(
-        &self,
-        runtime_id: RuntimeId,
-        hooks: RuntimeHooks,
-        cancel_rx: &mut watch::Receiver<bool>,
-    ) -> Result<RuntimeResult> {
-        if let Some(barrier) = hooks.root_barrier.as_ref() {
-            tokio::select! {
-                _ = barrier.wait() => {},
-                _ = cancel_rx.changed() => {
-                    return Ok(RuntimeResult::cancelled(runtime_id, "runtime cancelled", json!({"runtime_id": runtime_id.to_string()}), Vec::new()));
-                }
-            }
-        }
-
-        let worker_a = self.kernel.agent_by_kind(AgentKind::WorkerA).await?;
-        let worker_b = self.kernel.agent_by_kind(AgentKind::WorkerB).await?;
-
-        let child_a = self
-            .kernel
-            .spawn_child(runtime_id, &worker_a, "Investigate branch A")
-            .await?;
-        let child_b = self
-            .kernel
-            .spawn_child(runtime_id, &worker_b, "Investigate branch B")
-            .await?;
-
-        self.kernel
-            .transition_runtime(runtime_id, RuntimeState::Waiting)
-            .await?;
-
-        let kernel_a = self.kernel.clone();
-        let kernel_b = self.kernel.clone();
-        let hooks_a = hooks.clone();
-        let hooks_b = hooks;
-        let task_a =
-            tokio::spawn(async move { kernel_a.executor().run(child_a.id(), hooks_a).await });
-        let task_b =
-            tokio::spawn(async move { kernel_b.executor().run(child_b.id(), hooks_b).await });
-
-        let child_a_result = task_a
-            .await
-            .map_err(|err| WyvernError::ExecutionError(err.to_string()))??;
-        let child_b_result = task_b
-            .await
-            .map_err(|err| WyvernError::ExecutionError(err.to_string()))??;
-
-        if *cancel_rx.borrow() {
-            return Ok(RuntimeResult::cancelled(
-                runtime_id,
-                "runtime cancelled",
-                json!({"runtime_id": runtime_id.to_string()}),
-                vec![child_a_result, child_b_result],
-            ));
-        }
-
-        let runtime = self.kernel.get_runtime(runtime_id).await?;
-        let result = RuntimeResult::completed(
-            runtime_id,
-            "Commander synthesized child results",
-            json!({
-                "role": "commander",
-                "mission_id": runtime.mission_id,
-                "children": [child_a_result.runtime_id, child_b_result.runtime_id],
-            }),
-            vec![child_a_result, child_b_result],
-        );
-        self.kernel
-            .complete_runtime(runtime_id, result.clone())
-            .await?;
-        Ok(result)
-    }
-
-    #[async_recursion]
-    async fn run_worker_a(
-        &self,
-        runtime_id: RuntimeId,
-        hooks: RuntimeHooks,
-        cancel_rx: &mut watch::Receiver<bool>,
-    ) -> Result<RuntimeResult> {
-        self.kernel
-            .transition_runtime(runtime_id, RuntimeState::Waiting)
-            .await?;
-        if let Some(barrier) = hooks.level_two_barrier.as_ref() {
-            tokio::select! {
-                _ = barrier.wait() => {},
-                _ = cancel_rx.changed() => {
-                    return Ok(RuntimeResult::cancelled(runtime_id, "runtime cancelled", json!({"runtime_id": runtime_id.to_string()}), Vec::new()));
-                }
-            }
-        }
-
-        let worker_a1 = self.kernel.agent_by_kind(AgentKind::WorkerA1).await?;
-        let worker_a2 = self.kernel.agent_by_kind(AgentKind::WorkerA2).await?;
-
-        let child_a1 = self
-            .kernel
-            .spawn_child(runtime_id, &worker_a1, "Analyze endpoint A1")
-            .await?;
-        let child_a2 = self
-            .kernel
-            .spawn_child(runtime_id, &worker_a2, "Analyze endpoint A2")
-            .await?;
-
-        let kernel_a1 = self.kernel.clone();
-        let kernel_a2 = self.kernel.clone();
-        let hooks_a1 = hooks.clone();
-        let hooks_a2 = hooks;
-        let task_a1 =
-            tokio::spawn(async move { kernel_a1.executor().run(child_a1.id(), hooks_a1).await });
-        let task_a2 =
-            tokio::spawn(async move { kernel_a2.executor().run(child_a2.id(), hooks_a2).await });
-
-        let child_a1_result = task_a1
-            .await
-            .map_err(|err| WyvernError::ExecutionError(err.to_string()))??;
-        let child_a2_result = task_a2
-            .await
-            .map_err(|err| WyvernError::ExecutionError(err.to_string()))??;
-
-        if *cancel_rx.borrow() {
-            return Ok(RuntimeResult::cancelled(
-                runtime_id,
-                "runtime cancelled",
-                json!({"runtime_id": runtime_id.to_string()}),
-                vec![child_a1_result, child_a2_result],
-            ));
-        }
-
-        let result = RuntimeResult::completed(
-            runtime_id,
-            "Worker A synthesized its children",
-            json!({
-                "role": "worker_a",
-                "children": [child_a1_result.runtime_id, child_a2_result.runtime_id],
-            }),
-            vec![child_a1_result, child_a2_result],
-        );
-        self.kernel
-            .complete_runtime(runtime_id, result.clone())
-            .await?;
-        Ok(result)
-    }
-
-    #[async_recursion]
-    async fn run_worker_b(
-        &self,
-        runtime_id: RuntimeId,
-        hooks: RuntimeHooks,
-        cancel_rx: &mut watch::Receiver<bool>,
-    ) -> Result<RuntimeResult> {
-        self.kernel
-            .transition_runtime(runtime_id, RuntimeState::Waiting)
-            .await?;
-        if let Some(barrier) = hooks.level_two_barrier.as_ref() {
-            tokio::select! {
-                _ = barrier.wait() => {},
-                _ = cancel_rx.changed() => {
-                    return Ok(RuntimeResult::cancelled(runtime_id, "runtime cancelled", json!({"runtime_id": runtime_id.to_string()}), Vec::new()));
-                }
-            }
-        }
-
-        if hooks.failure_kinds.contains(&AgentKind::WorkerB) {
-            let failure = self
-                .kernel
-                .fail_runtime(runtime_id, "demo worker B failure")
-                .await?;
-            return Ok(RuntimeResult::failed(
-                runtime_id,
-                "Worker B failed",
-                json!({"runtime_id": runtime_id.to_string(), "state": failure.state.to_string()}),
-                Vec::new(),
-            ));
-        }
-
-        tokio::select! {
-            _ = tokio::time::sleep(std::time::Duration::from_millis(25)) => {},
-            _ = cancel_rx.changed() => {
-                return Ok(RuntimeResult::cancelled(
-                    runtime_id,
-                    "runtime cancelled",
-                    json!({"runtime_id": runtime_id.to_string()}),
-                    Vec::new(),
-                ));
-            }
-        }
-
-        if *cancel_rx.borrow() {
-            return Ok(RuntimeResult::cancelled(
-                runtime_id,
-                "runtime cancelled",
-                json!({"runtime_id": runtime_id.to_string()}),
-                Vec::new(),
-            ));
-        }
-
-        let result = RuntimeResult::completed(
-            runtime_id,
-            "Worker B completed deterministic work",
-            json!({
-                "role": "worker_b",
-                "kind": "leaf",
-            }),
-            Vec::new(),
-        );
-        self.kernel
-            .complete_runtime(runtime_id, result.clone())
-            .await?;
-        Ok(result)
-    }
-
-    #[async_recursion]
-    async fn run_leaf(
-        &self,
-        runtime_id: RuntimeId,
-        hooks: RuntimeHooks,
-        cancel_rx: &mut watch::Receiver<bool>,
-    ) -> Result<RuntimeResult> {
         let runtime = self.kernel.get_runtime(runtime_id).await?;
         let agent = self.kernel.agent(runtime.agent_id).await?;
+        let behavior = self.kernel.inner.behavior_registry.resolve(&agent).await?;
+        let context = self.kernel.context(runtime_id).await?;
 
-        if let Some(gate) = hooks.pause_gate.as_ref() {
-            gate.started.notify_waiters();
-            tokio::select! {
-                _ = gate.release.notified() => {},
-                _ = cancel_rx.changed() => {
-                    return Ok(RuntimeResult::cancelled(
-                        runtime_id,
-                        "runtime cancelled",
-                        json!({"runtime_id": runtime_id.to_string()}),
-                        Vec::new(),
-                    ));
-                }
+        if started_by_scheduler {
+            if runtime.state != RuntimeState::Running {
+                return Err(WyvernError::ExecutionError(format!(
+                    "scheduler invoked behavior for runtime {runtime_id} in state {}",
+                    runtime.state
+                )));
             }
-        }
-
-        if hooks.failure_kinds.contains(&agent.kind) {
-            let failure = self
-                .kernel
-                .fail_runtime(runtime_id, format!("demo leaf failure for {}", agent.kind))
+        } else if runtime.state != RuntimeState::Running {
+            self.kernel.publish(RuntimeEvent::RuntimeStarted {
+                mission_id: runtime.mission_id,
+                runtime_id,
+                parent_id: runtime.parent_id,
+                agent_id: runtime.agent_id,
+                timestamp: now_millis(),
+            })?;
+            self.kernel
+                .transition_runtime(runtime_id, RuntimeState::Running)
                 .await?;
-            return Ok(RuntimeResult::failed(
-                runtime_id,
-                format!("{} failed", agent.name),
-                json!({"runtime_id": runtime_id.to_string(), "state": failure.state.to_string()}),
-                Vec::new(),
-            ));
         }
 
-        tokio::select! {
-            _ = tokio::time::sleep(std::time::Duration::from_millis(15)) => {},
-            _ = cancel_rx.changed() => {
-                return Ok(RuntimeResult::cancelled(
-                    runtime_id,
-                    "runtime cancelled",
-                    json!({"runtime_id": runtime_id.to_string()}),
-                    Vec::new(),
-                ));
-            }
-        }
-
-        if *cancel_rx.borrow() {
-            return Ok(RuntimeResult::cancelled(
-                runtime_id,
-                "runtime cancelled",
-                json!({"runtime_id": runtime_id.to_string()}),
-                Vec::new(),
-            ));
-        }
-
-        let result = RuntimeResult::completed(
-            runtime_id,
-            format!("{} completed leaf work", agent.name),
-            json!({
-                "role": agent.kind.to_string(),
-                "kind": "leaf",
-            }),
-            Vec::new(),
+        let execution = RuntimeExecutionContext::new(
+            BehaviorRuntimeHandle::new(RuntimeHandle::new(self.kernel.clone(), runtime_id)),
+            agent,
+            context,
+            cancellation,
+            Arc::new(self.clone()),
+            hooks,
         );
-        self.kernel
-            .complete_runtime(runtime_id, result.clone())
-            .await?;
+        let result = behavior.execute(execution).await?;
+        if result.runtime_id != runtime_id {
+            return Err(WyvernError::ExecutionError(format!(
+                "behavior returned result for runtime {} while executing {runtime_id}",
+                result.runtime_id
+            )));
+        }
         Ok(result)
     }
 }
 
+#[async_trait::async_trait]
+impl ChildRuntimeRunner for RuntimeExecutor {
+    async fn run_child(
+        &self,
+        parent_id: RuntimeId,
+        child_id: RuntimeId,
+        hooks: RuntimeHooks,
+    ) -> Result<RuntimeResult> {
+        let child = self.kernel.get_runtime(child_id).await?;
+        let parent = self.kernel.get_runtime(parent_id).await?;
+        if child.parent_id != Some(parent_id) || child.mission_id != parent.mission_id {
+            return Err(WyvernError::ExecutionError(
+                "behavior may only run a direct child in the same mission".into(),
+            ));
+        }
+        self.run_with_hooks(child_id, hooks).await
+    }
+}
+
+#[async_trait::async_trait]
+impl ScheduledRuntimeExecutor for RuntimeExecutor {
+    async fn execute(
+        &self,
+        runtime: Runtime,
+        cancellation: watch::Receiver<bool>,
+    ) -> std::result::Result<RuntimeResult, RuntimeExecutionError> {
+        self.execute_behavior(runtime.id, cancellation, RuntimeHooks::default(), true)
+            .await
+            .map_err(|error| RuntimeExecutionError::permanent(error.to_string()))
+    }
+}
 impl RuntimeHandle {
     pub fn new(kernel: Kernel, runtime_id: RuntimeId) -> Self {
         Self { kernel, runtime_id }
@@ -1864,6 +1735,14 @@ impl RuntimeHandle {
 
     pub fn id(&self) -> RuntimeId {
         self.runtime_id
+    }
+
+    pub async fn inspect(&self) -> Result<Runtime> {
+        self.kernel.get_runtime(self.runtime_id).await
+    }
+
+    pub async fn agent_by_kind(&self, kind: AgentKind) -> Result<AgentDefinition> {
+        self.kernel.agent_by_kind(kind).await
     }
 
     pub async fn spawn_child(

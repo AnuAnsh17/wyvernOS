@@ -1,3 +1,4 @@
+use crate::behavior::BehaviorError;
 use crate::decision::DecisionError;
 use crate::domain::{MemoryId, MissionId, MissionState, RuntimeId, RuntimeState};
 use crate::scheduler::SchedulerState;
@@ -44,6 +45,8 @@ pub enum WyvernError {
     ExecutionError(String),
     #[error("decision error: {0}")]
     Decision(#[from] DecisionError),
+    #[error("runtime behavior error: {0}")]
+    Behavior(#[from] BehaviorError),
     #[error("cancellation error: {0}")]
     CancellationError(String),
     #[error("scheduler error: {0}")]

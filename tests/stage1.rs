@@ -7,9 +7,10 @@ use tempfile::TempDir;
 use tokio::sync::Barrier;
 use tokio::time::timeout;
 use wyvern::agent::{AgentDefinition, AgentKind};
+use wyvern::behavior::demo::{PauseGate, RuntimeHooks};
 use wyvern::domain::{MissionId, MissionState, RuntimeId, RuntimeState};
 use wyvern::events::RuntimeEvent;
-use wyvern::kernel::{Kernel, PauseGate, RuntimeHooks};
+use wyvern::kernel::Kernel;
 use wyvern::result::{RuntimeOutcome, RuntimeResult};
 
 #[derive(Clone)]
@@ -97,7 +98,7 @@ async fn run_root_with_hooks(
 ) -> RuntimeResult {
     kernel
         .executor()
-        .run(root_id, hooks)
+        .run_with_hooks(root_id, hooks)
         .await
         .expect("runtime execution")
 }
@@ -356,7 +357,13 @@ async fn concurrent_children_and_missions_execute_without_crossing_boundaries() 
             let kernel = kernel.clone();
             let hooks = RuntimeHooks::default().with_root_barrier(shared_barrier.clone());
             let root_id = *root_id;
-            tokio::spawn(async move { kernel.executor().run(root_id, hooks).await.expect("root") })
+            tokio::spawn(async move {
+                kernel
+                    .executor()
+                    .run_with_hooks(root_id, hooks)
+                    .await
+                    .expect("root")
+            })
         })
         .collect();
 
@@ -433,7 +440,7 @@ async fn running_runtime_can_be_cancelled() {
     let task = tokio::spawn(async move {
         kernel_for_task
             .executor()
-            .run(runtime_id, hooks)
+            .run_with_hooks(runtime_id, hooks)
             .await
             .expect("leaf run")
     });
@@ -495,7 +502,7 @@ async fn registry_supports_concurrent_queries_while_runtime_is_running() {
     let task = tokio::spawn(async move {
         kernel_for_task
             .executor()
-            .run(root_id, hooks)
+            .run_with_hooks(root_id, hooks)
             .await
             .expect("run")
     });

@@ -1,6 +1,7 @@
 //! Wyvern core library surface.
 
 pub mod agent;
+pub mod behavior;
 pub mod capability;
 pub mod cli;
 pub mod context;
@@ -15,6 +16,11 @@ pub mod result;
 pub mod scheduler;
 
 pub use agent::{AgentDefinition, AgentId, AgentKind};
+pub use behavior::demo::{PauseGate, RuntimeHooks};
+pub use behavior::{
+    BehaviorError, BehaviorRuntimeHandle, RuntimeBehavior, RuntimeBehaviorRegistry,
+    RuntimeExecutionContext,
+};
 pub use capability::{
     CapabilityCancellation, CapabilityDescriptor, CapabilityError, CapabilityExecutor,
     CapabilityKind, CapabilityPermission, CapabilityPermissionScope, CapabilityRegistry,
@@ -35,7 +41,7 @@ pub use domain::{
     MissionState, RuntimeId, RuntimeState, Timestamp, ToolId,
 };
 pub use error::{Result, WyvernError};
-pub use kernel::{Kernel, Runtime, RuntimeExecutor, RuntimeHandle, RuntimeHooks, RuntimeRegistry};
+pub use kernel::{Kernel, Runtime, RuntimeExecutor, RuntimeHandle, RuntimeRegistry};
 pub use memory::{
     MemoryDraft, MemoryItem, MemoryMetadata, MemoryMetadataValue, MemoryProvenance, MemoryQuery,
     MemoryScope, MemoryStatus, MemoryStore, MemoryType,
