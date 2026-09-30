@@ -1,6 +1,7 @@
+use crate::decision::{DecisionEngineProvenance, DecisionError, DecisionOptionId, DecisionType};
 use crate::domain::{
-    AgentId, CapabilityId, CapabilityRequestId, MemoryId, MissionId, RuntimeId, RuntimeState,
-    Timestamp, ToolId,
+    AgentId, CapabilityId, CapabilityRequestId, DecisionRequestId, MemoryId, MissionId, RuntimeId,
+    RuntimeState, Timestamp, ToolId,
 };
 use crate::error::Result;
 use crate::result::RuntimeOutcome;
@@ -76,6 +77,31 @@ pub enum RuntimeEvent {
         runtime_id: RuntimeId,
         parent_id: Option<RuntimeId>,
         keys: Vec<String>,
+        timestamp: Timestamp,
+    },
+    DecisionRequested {
+        mission_id: MissionId,
+        runtime_id: RuntimeId,
+        parent_id: Option<RuntimeId>,
+        request_id: DecisionRequestId,
+        decision_type: DecisionType,
+        timestamp: Timestamp,
+    },
+    DecisionCompleted {
+        mission_id: MissionId,
+        runtime_id: RuntimeId,
+        parent_id: Option<RuntimeId>,
+        request_id: DecisionRequestId,
+        selected_option: DecisionOptionId,
+        engine: DecisionEngineProvenance,
+        timestamp: Timestamp,
+    },
+    DecisionFailed {
+        mission_id: MissionId,
+        runtime_id: RuntimeId,
+        parent_id: Option<RuntimeId>,
+        request_id: DecisionRequestId,
+        error: DecisionError,
         timestamp: Timestamp,
     },
     MemoryCreated {
@@ -189,6 +215,9 @@ impl RuntimeEvent {
             | Self::RuntimeFailed { timestamp, .. }
             | Self::RuntimeCancelled { timestamp, .. } => *timestamp,
             Self::ContextUpdated { timestamp, .. }
+            | Self::DecisionRequested { timestamp, .. }
+            | Self::DecisionCompleted { timestamp, .. }
+            | Self::DecisionFailed { timestamp, .. }
             | Self::MemoryCreated { timestamp, .. }
             | Self::MemorySuperseded { timestamp, .. }
             | Self::MemoryInvalidated { timestamp, .. }
@@ -214,6 +243,9 @@ impl RuntimeEvent {
             | Self::RuntimeFailed { runtime_id, .. }
             | Self::RuntimeCancelled { runtime_id, .. } => *runtime_id,
             Self::ContextUpdated { runtime_id, .. }
+            | Self::DecisionRequested { runtime_id, .. }
+            | Self::DecisionCompleted { runtime_id, .. }
+            | Self::DecisionFailed { runtime_id, .. }
             | Self::MemoryCreated { runtime_id, .. }
             | Self::MemorySuperseded { runtime_id, .. }
             | Self::MemoryInvalidated { runtime_id, .. }
@@ -503,6 +535,34 @@ impl EventBus {
             } => {
                 tracing::info!(mission_id = %mission_id, runtime_id = %runtime_id, state = ?state, attempt = *attempt, detail = ?detail, "scheduler.runtime_state")
             }
+            RuntimeEvent::DecisionRequested {
+                mission_id,
+                runtime_id,
+                request_id,
+                decision_type,
+                ..
+            } => {
+                tracing::info!(mission_id = %mission_id, runtime_id = %runtime_id, request_id = %request_id, decision_type = ?decision_type, "decision.requested")
+            }
+            RuntimeEvent::DecisionCompleted {
+                mission_id,
+                runtime_id,
+                request_id,
+                selected_option,
+                engine,
+                ..
+            } => {
+                tracing::info!(mission_id = %mission_id, runtime_id = %runtime_id, request_id = %request_id, selected_option = %selected_option.as_str(), engine_id = %engine.engine_id, "decision.completed")
+            }
+            RuntimeEvent::DecisionFailed {
+                mission_id,
+                runtime_id,
+                request_id,
+                error,
+                ..
+            } => {
+                tracing::warn!(mission_id = %mission_id, runtime_id = %runtime_id, request_id = %request_id, error = %error, "decision.failed")
+            }
         }
     }
 }
@@ -518,6 +578,9 @@ impl RuntimeEvent {
             Self::RuntimeFailed { .. } => "runtime.failed",
             Self::RuntimeCancelled { .. } => "runtime.cancelled",
             Self::ContextUpdated { .. } => "context.updated",
+            Self::DecisionRequested { .. } => "decision.requested",
+            Self::DecisionCompleted { .. } => "decision.completed",
+            Self::DecisionFailed { .. } => "decision.failed",
             Self::MemoryCreated { .. } => "memory.created",
             Self::MemorySuperseded { .. } => "memory.superseded",
             Self::MemoryInvalidated { .. } => "memory.invalidated",
@@ -567,6 +630,9 @@ impl RuntimeEvent {
             | Self::RuntimeFailed { mission_id, .. }
             | Self::RuntimeCancelled { mission_id, .. } => *mission_id,
             Self::ContextUpdated { mission_id, .. }
+            | Self::DecisionRequested { mission_id, .. }
+            | Self::DecisionCompleted { mission_id, .. }
+            | Self::DecisionFailed { mission_id, .. }
             | Self::MemoryCreated { mission_id, .. }
             | Self::MemorySuperseded { mission_id, .. }
             | Self::MemoryInvalidated { mission_id, .. }
@@ -598,7 +664,10 @@ impl RuntimeEvent {
             | Self::CapabilityCancelled { parent_id, .. }
             | Self::CapabilityRejected { parent_id, .. } => *parent_id,
             Self::SchedulerStateChanged { parent_id, .. } => *parent_id,
-            Self::ContextUpdated { parent_id, .. } => *parent_id,
+            Self::ContextUpdated { parent_id, .. }
+            | Self::DecisionRequested { parent_id, .. }
+            | Self::DecisionCompleted { parent_id, .. }
+            | Self::DecisionFailed { parent_id, .. } => *parent_id,
             Self::MemoryCreated { .. }
             | Self::MemorySuperseded { .. }
             | Self::MemoryInvalidated { .. }

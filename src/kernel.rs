@@ -7,6 +7,10 @@ use crate::context::{
     ContextItem, ContextProvenance, ContextSourceType, ContextStore, RuntimeContext,
     RuntimeStateView, StructuredChildOutput,
 };
+use crate::decision::{
+    DecisionConstraint, DecisionContext, DecisionEngine, DecisionRequest, DecisionResult,
+    DecisionType,
+};
 use crate::domain::{now_millis, Mission, MissionId, MissionState, RuntimeId, RuntimeState};
 use crate::error::{Result, WyvernError};
 use crate::events::{EventBus, RuntimeEvent};
@@ -212,6 +216,7 @@ struct KernelInner {
     pub store: Arc<dyn RuntimeStore>,
     pub context_store: ContextStore,
     pub memory_store: MemoryStore,
+    pub decision_engine: Option<Arc<dyn DecisionEngine>>,
     pub controls: RwLock<HashMap<RuntimeId, watch::Sender<bool>>>,
 }
 
@@ -220,7 +225,24 @@ impl Kernel {
         let context_store = ContextStore::in_memory().await?;
         let events = EventBus::new(1024);
         let memory_store = MemoryStore::in_memory(events.clone()).await?;
-        Self::new_with_stores(store, context_store, memory_store, events).await
+        Self::new_with_stores(store, context_store, memory_store, events, None).await
+    }
+
+    pub async fn new_with_decision_engine(
+        store: Arc<dyn RuntimeStore>,
+        decision_engine: Arc<dyn DecisionEngine>,
+    ) -> Result<Self> {
+        let context_store = ContextStore::in_memory().await?;
+        let events = EventBus::new(1024);
+        let memory_store = MemoryStore::in_memory(events.clone()).await?;
+        Self::new_with_stores(
+            store,
+            context_store,
+            memory_store,
+            events,
+            Some(decision_engine),
+        )
+        .await
     }
 
     async fn new_with_stores(
@@ -228,6 +250,7 @@ impl Kernel {
         context_store: ContextStore,
         memory_store: MemoryStore,
         events: EventBus,
+        decision_engine: Option<Arc<dyn DecisionEngine>>,
     ) -> Result<Self> {
         let capabilities = CapabilityRegistry::new(events.clone());
         let kernel = Self {
@@ -240,6 +263,7 @@ impl Kernel {
                 store,
                 context_store,
                 memory_store,
+                decision_engine,
                 controls: RwLock::new(HashMap::new()),
             }),
         };
@@ -252,7 +276,25 @@ impl Kernel {
         let context_store = ContextStore::open(&path).await?;
         let events = EventBus::new(1024);
         let memory_store = MemoryStore::open(&path, events.clone()).await?;
-        Self::new_with_stores(Arc::new(store), context_store, memory_store, events).await
+        Self::new_with_stores(Arc::new(store), context_store, memory_store, events, None).await
+    }
+
+    pub async fn new_sqlite_with_decision_engine(
+        path: impl AsRef<Path>,
+        decision_engine: Arc<dyn DecisionEngine>,
+    ) -> Result<Self> {
+        let store = SqliteRuntimeStore::open(&path).await?;
+        let context_store = ContextStore::open(&path).await?;
+        let events = EventBus::new(1024);
+        let memory_store = MemoryStore::open(&path, events.clone()).await?;
+        Self::new_with_stores(
+            Arc::new(store),
+            context_store,
+            memory_store,
+            events,
+            Some(decision_engine),
+        )
+        .await
     }
 
     pub fn contexts(&self) -> ContextStore {
@@ -265,6 +307,125 @@ impl Kernel {
 
     pub fn capabilities(&self) -> CapabilityRegistry {
         self.inner.capabilities.clone()
+    }
+
+    /// Builds a bounded decision request from runtime state and caller-selected
+    /// context. The entire runtime context is never passed implicitly.
+    pub async fn build_decision_request(
+        &self,
+        runtime_id: RuntimeId,
+        decision_type: DecisionType,
+        options: Vec<crate::decision::DecisionOption>,
+        context: DecisionContext,
+        constraints: Vec<DecisionConstraint>,
+    ) -> Result<DecisionRequest> {
+        let runtime = self.get_runtime(runtime_id).await?;
+        let branch_id = self.branch_id(runtime_id).await?;
+        Ok(DecisionRequest::new(
+            runtime.mission_id,
+            runtime.id,
+            branch_id,
+            runtime.parent_id,
+            runtime.state,
+            runtime.objective,
+            decision_type,
+            options,
+        )
+        .with_context(context)
+        .with_constraints(constraints))
+    }
+
+    /// Dispatches a bounded decision through the injected model-agnostic
+    /// boundary. The selected option is validated against the supplied options.
+    pub async fn decide(&self, request: DecisionRequest) -> Result<DecisionResult> {
+        request.validate()?;
+        let runtime = self.get_runtime(request.runtime_id).await?;
+        let expected_branch_id = self.branch_id(runtime.id).await?;
+        if runtime.mission_id != request.mission_id
+            || runtime.parent_id != request.runtime_state.parent_runtime_id
+            || runtime.state != request.runtime_state.lifecycle_state
+            || runtime.objective != request.runtime_state.objective
+            || expected_branch_id != request.branch_id
+        {
+            return Err(crate::decision::DecisionError::InvalidRequest(
+                "runtime, mission, branch, or state does not match the current runtime".into(),
+            )
+            .into());
+        }
+
+        self.publish(RuntimeEvent::DecisionRequested {
+            mission_id: runtime.mission_id,
+            runtime_id: runtime.id,
+            parent_id: runtime.parent_id,
+            request_id: request.request_id,
+            decision_type: request.decision_type.clone(),
+            timestamp: now_millis(),
+        })?;
+
+        let Some(engine) = self.inner.decision_engine.as_ref() else {
+            let error = crate::decision::DecisionError::EngineUnavailable;
+            self.publish(RuntimeEvent::DecisionFailed {
+                mission_id: runtime.mission_id,
+                runtime_id: runtime.id,
+                parent_id: runtime.parent_id,
+                request_id: request.request_id,
+                error: error.clone(),
+                timestamp: now_millis(),
+            })?;
+            return Err(error.into());
+        };
+
+        let result = match engine.decide(request.clone()).await {
+            Ok(result) => result,
+            Err(error) => {
+                self.publish(RuntimeEvent::DecisionFailed {
+                    mission_id: runtime.mission_id,
+                    runtime_id: runtime.id,
+                    parent_id: runtime.parent_id,
+                    request_id: request.request_id,
+                    error: error.clone(),
+                    timestamp: now_millis(),
+                })?;
+                return Err(error.into());
+            }
+        };
+
+        if let Err(error) = result.validate_for(&request) {
+            self.publish(RuntimeEvent::DecisionFailed {
+                mission_id: runtime.mission_id,
+                runtime_id: runtime.id,
+                parent_id: runtime.parent_id,
+                request_id: request.request_id,
+                error: error.clone(),
+                timestamp: now_millis(),
+            })?;
+            return Err(error.into());
+        }
+
+        self.publish(RuntimeEvent::DecisionCompleted {
+            mission_id: runtime.mission_id,
+            runtime_id: runtime.id,
+            parent_id: runtime.parent_id,
+            request_id: result.request_id,
+            selected_option: result.selected_option.clone(),
+            engine: result.engine.clone(),
+            timestamp: now_millis(),
+        })?;
+        Ok(result)
+    }
+
+    async fn branch_id(&self, runtime_id: RuntimeId) -> Result<RuntimeId> {
+        let mut current = self.get_runtime(runtime_id).await?;
+        loop {
+            let Some(parent_id) = current.parent_id else {
+                return Ok(current.id);
+            };
+            let parent = self.get_runtime(parent_id).await?;
+            if parent.parent_id.is_none() {
+                return Ok(current.id);
+            }
+            current = parent;
+        }
     }
 
     /// Dispatches a request only after confirming its runtime/mission association.
@@ -1448,6 +1609,28 @@ impl RuntimeHandle {
 
     pub async fn transition_to(&self, next: RuntimeState) -> Result<Runtime> {
         self.kernel.transition_runtime(self.runtime_id, next).await
+    }
+
+    /// Requests a bounded decision for this runtime using the engine injected
+    /// into the Kernel. Context must be selected explicitly by the caller.
+    pub async fn decide(
+        &self,
+        decision_type: DecisionType,
+        options: Vec<crate::decision::DecisionOption>,
+        context: DecisionContext,
+        constraints: Vec<DecisionConstraint>,
+    ) -> Result<DecisionResult> {
+        let request = self
+            .kernel
+            .build_decision_request(
+                self.runtime_id,
+                decision_type,
+                options,
+                context,
+                constraints,
+            )
+            .await?;
+        self.kernel.decide(request).await
     }
 }
 

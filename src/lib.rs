@@ -4,6 +4,7 @@ pub mod agent;
 pub mod capability;
 pub mod cli;
 pub mod context;
+pub mod decision;
 pub mod domain;
 pub mod error;
 pub mod events;
@@ -23,9 +24,15 @@ pub use context::{
     ContextCompiler, ContextItem, ContextSnapshot, ContextStore, ContextValue, RuntimeContext,
     StructuredChildOutput,
 };
+pub use decision::{
+    DecisionConstraint, DecisionConstraintKind, DecisionContext, DecisionContextFact,
+    DecisionEngine, DecisionEngineProvenance, DecisionError, DecisionMemory, DecisionOption,
+    DecisionOptionId, DecisionRequest, DecisionResult, DecisionRuntimeState, DecisionType,
+    MockDecisionEngine,
+};
 pub use domain::{
-    CapabilityId, CapabilityRequestId, MemoryId, Mission, MissionId, MissionState, RuntimeId,
-    RuntimeState, Timestamp, ToolId,
+    CapabilityId, CapabilityRequestId, DecisionRequestId, MemoryId, Mission, MissionId,
+    MissionState, RuntimeId, RuntimeState, Timestamp, ToolId,
 };
 pub use error::{Result, WyvernError};
 pub use kernel::{Kernel, Runtime, RuntimeExecutor, RuntimeHandle, RuntimeHooks, RuntimeRegistry};

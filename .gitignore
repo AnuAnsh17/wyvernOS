@@ -1,1 +1,6 @@
 /target
+
+# Local Laya benchmark results are machine-specific and should not be committed.
+/benchmarks/laya/results/*.json
+/benchmarks/laya/results/**/*.json
+/benchmarks/laya/__pycache__/
