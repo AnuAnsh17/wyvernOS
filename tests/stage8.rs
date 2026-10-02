@@ -4,6 +4,8 @@ use std::sync::Arc;
 use wyvern::authorization::{AuthorizationGrantDraft, AuthorizationIssuer, AuthorizationScope};
 use wyvern::capability::mock_echo_definition;
 use wyvern::capability::{CapabilityCancellation, CapabilityRequest, CapabilityRequestStatus};
+use wyvern::decision::{DecisionContext, DecisionOption, DecisionType, MockDecisionEngine};
+use wyvern::domain::RuntimeState;
 use wyvern::kernel::Kernel;
 use wyvern::persistence::SqliteRuntimeStore;
 use wyvern::skills::{
@@ -227,6 +229,111 @@ async fn installed_skill_capability_still_requires_kernel_authorization() {
         .await
         .unwrap();
     assert_eq!(allowed.status, CapabilityRequestStatus::Succeeded);
+}
+
+#[tokio::test]
+async fn skill_execution_decision_result_and_context_survive_restart() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("skill-orchestration.sqlite");
+    let store = Arc::new(SqliteRuntimeStore::open(&database).await.unwrap());
+    let kernel = Kernel::new_sqlite_with_decision_engine(&database, Arc::new(MockDecisionEngine))
+        .await
+        .unwrap();
+    let registry = SkillRegistry::new(store);
+    let skill_manifest = manifest();
+    registry
+        .register_manifest(skill_manifest.clone())
+        .await
+        .unwrap();
+    let bindings = registry
+        .install_adapter(
+            Arc::new(MockSkillAdapter {
+                manifest: skill_manifest,
+            }),
+            &kernel.capabilities(),
+        )
+        .await
+        .unwrap();
+    let binding = &bindings[0];
+    let mission = kernel.create_mission("skill orchestration").await.unwrap();
+    let agent = kernel
+        .register_agent(wyvern::AgentDefinition::new(
+            "skill orchestrator",
+            wyvern::AgentKind::Commander,
+        ))
+        .await
+        .unwrap();
+    let runtime = kernel
+        .create_runtime(mission.id, None, &agent, "choose and invoke skill")
+        .await
+        .unwrap();
+    let decision = kernel
+        .build_decision_request(
+            runtime.id(),
+            DecisionType::TaskRouting,
+            vec![DecisionOption::new("invoke_skill", "invoke the installed skill").unwrap()],
+            DecisionContext::default(),
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let decision_result = kernel.decide(decision).await.unwrap();
+    assert_eq!(decision_result.selected_option.as_str(), "invoke_skill");
+
+    let grant = kernel
+        .issue_authorization_grant(
+            runtime.id(),
+            AuthorizationGrantDraft {
+                issuer: AuthorizationIssuer::Runtime(runtime.id()),
+                subject_agent_id: agent.id,
+                capability_id: binding.descriptor.id,
+                allowed_tools: vec![binding.tools[0].id],
+                scope: AuthorizationScope::Runtime(runtime.id()),
+                maximum_risk: RiskLevel::Low,
+                expires_at: None,
+            },
+        )
+        .await
+        .unwrap();
+    let mut request = CapabilityRequest::new(
+        runtime.id(),
+        mission.id,
+        binding.descriptor.id,
+        binding.tools[0].id,
+        json!({"message": "orchestrated"}),
+    );
+    request.authorization_grant_id = Some(grant.id);
+    let capability_result = kernel
+        .execute_capability(request, &CapabilityCancellation::new())
+        .await
+        .unwrap();
+    assert_eq!(capability_result.status, CapabilityRequestStatus::Succeeded);
+    kernel
+        .add_context_fact(
+            runtime.id(),
+            "skill.result",
+            wyvern::ContextValue::Structured(capability_result.output.clone().unwrap()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        kernel.get_runtime(runtime.id()).await.unwrap().state,
+        RuntimeState::Ready
+    );
+    drop(kernel);
+
+    let reopened = Kernel::new_sqlite_with_decision_engine(&database, Arc::new(MockDecisionEngine))
+        .await
+        .unwrap();
+    let context = reopened.context(runtime.id()).await.unwrap();
+    assert!(context
+        .local_facts
+        .iter()
+        .any(|fact| fact.key == "skill.result"));
+    assert_eq!(
+        reopened.get_runtime(runtime.id()).await.unwrap().state,
+        RuntimeState::Ready
+    );
 }
 
 #[test]

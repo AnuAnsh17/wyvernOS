@@ -233,6 +233,8 @@ The Stage 8B `SkillRegistry` persists validated manifests in SQLite and resolves
 
 Stage 8C adds an explicit install bridge from a bound adapter to `CapabilityRegistry`. Installing a skill registers its declared executable bindings only; requests still pass through `Kernel::execute_capability`, including runtime-scoped authorization, risk checks, cancellation, timeout, and audit events.
 
+Stage 8D is covered by an offline orchestration path: a decision selects the skill action, the kernel-issued grant authorizes execution, the structured capability result enters runtime context, and SQLite restart hydration recovers the runtime and context. No model provider or autonomous planner is implied by this demo.
+
 ## Unresolved Decisions
 
 The following remain intentionally unresolved and should be documented as the implementation matures:
