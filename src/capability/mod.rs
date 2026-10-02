@@ -10,6 +10,7 @@ use crate::memory::{MemoryDraft, MemoryMetadataValue, MemoryProvenance, MemorySc
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
@@ -799,4 +800,124 @@ pub fn mock_echo_definition() -> (
         RiskLevel::Low,
     );
     (capability, tool, Arc::new(MockEchoExecutor))
+}
+
+struct FilesystemReadExecutor {
+    root: PathBuf,
+    max_bytes: u64,
+}
+
+#[async_trait::async_trait]
+impl CapabilityExecutor for FilesystemReadExecutor {
+    async fn execute(
+        &self,
+        request: CapabilityRequest,
+    ) -> std::result::Result<Value, CapabilityError> {
+        let relative_path = request
+            .input
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| CapabilityError::InvalidInput("path must be a string".into()))?;
+        let relative_path = Path::new(relative_path);
+        if relative_path.as_os_str().is_empty()
+            || relative_path.is_absolute()
+            || relative_path
+                .components()
+                .any(|component| component == Component::ParentDir)
+        {
+            return Err(CapabilityError::InvalidInput(
+                "path must be a non-empty relative path without parent traversal".into(),
+            ));
+        }
+
+        let root = self.root.clone();
+        let max_bytes = self.max_bytes;
+        let requested_path = relative_path.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let root = std::fs::canonicalize(&root).map_err(|error| {
+                CapabilityError::ExecutionFailed(format!("filesystem root is unavailable: {error}"))
+            })?;
+            let path = root.join(&requested_path);
+            let canonical_path = std::fs::canonicalize(&path).map_err(|error| {
+                CapabilityError::ExecutionFailed(format!("cannot read requested path: {error}"))
+            })?;
+            if !canonical_path.starts_with(&root) {
+                return Err(CapabilityError::PermissionDenied(
+                    "requested path escapes the filesystem workspace".into(),
+                ));
+            }
+            let metadata = std::fs::metadata(&canonical_path).map_err(|error| {
+                CapabilityError::ExecutionFailed(format!("cannot inspect requested path: {error}"))
+            })?;
+            if !metadata.is_file() {
+                return Err(CapabilityError::InvalidInput(
+                    "filesystem.read requires a regular file".into(),
+                ));
+            }
+            if metadata.len() > max_bytes {
+                return Err(CapabilityError::InvalidInput(format!(
+                    "file exceeds the {} byte limit",
+                    max_bytes
+                )));
+            }
+            let bytes = std::fs::read(&canonical_path).map_err(|error| {
+                CapabilityError::ExecutionFailed(format!("cannot read requested path: {error}"))
+            })?;
+            match String::from_utf8(bytes.clone()) {
+                Ok(content) => Ok(serde_json::json!({
+                    "path": requested_path.to_string_lossy(),
+                    "bytes": bytes.len(),
+                    "encoding": "utf-8",
+                    "content": content,
+                })),
+                Err(_) => Ok(serde_json::json!({
+                    "path": requested_path.to_string_lossy(),
+                    "bytes": bytes.len(),
+                    "encoding": "binary",
+                    "content_bytes": bytes,
+                })),
+            }
+        })
+        .await
+        .map_err(|error| CapabilityError::ExecutionFailed(error.to_string()))?
+    }
+}
+
+pub fn filesystem_read_definition(
+    root: impl Into<PathBuf>,
+    max_bytes: u64,
+) -> (
+    CapabilityDescriptor,
+    ToolDescriptor,
+    Arc<dyn CapabilityExecutor>,
+) {
+    let capability = CapabilityDescriptor::new(
+        "filesystem.read",
+        "1",
+        "wyvern.core",
+        CapabilityKind::Filesystem,
+    );
+    let tool = ToolDescriptor::new(
+        "read",
+        "Read a regular file within the configured workspace boundary.",
+        capability.id,
+        serde_json::json!({
+            "type": "object",
+            "required": ["path"],
+            "properties": {"path": {"type": "string"}}
+        }),
+        serde_json::json!({
+            "type": "object",
+            "required": ["path", "bytes", "encoding"]
+        }),
+        RiskLevel::Low,
+    );
+    (
+        capability,
+        tool,
+        Arc::new(FilesystemReadExecutor {
+            root: root.into(),
+            max_bytes: max_bytes.max(1),
+        }),
+    )
 }

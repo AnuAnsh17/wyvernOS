@@ -130,7 +130,7 @@ Stages 1–6D and Stage 7A are implemented. The next planned work is:
 
 1. **Stage 7B — Atomic state and event consistency:** extend the SQLite runtime transition transaction to the remaining critical mutations and failure-injection coverage.
 2. **Stage 7C — Scheduler hardening:** reconcile terminal recovery state, then address remaining race, fairness, and concurrency edge cases.
-3. **Stage 7D — First real read-only capability:** implement a narrowly scoped `filesystem.read` path protected by authorization.
+3. **Stage 7D — First real read-only capability:** extend the authorized, workspace-scoped `filesystem.read` path with concurrency, restart registration, and symlink coverage.
 4. **Stage 8 — Skill integration:** define contracts and registry, bridge adapters through capabilities, and demonstrate runtime orchestration.
 5. **Stage 9 — Specialized decision intelligence:** formalize the decision dataset, distill teacher labels, evaluate a specialized Laya `DecisionEngine`, then add conservative local/cloud routing. Kaggle is the preferred GPU training environment for the Stage 9 experiments; authentication and held-out evaluation requirements are documented in the project plan.
 6. **Later work:** TUI, broader application control, deeper recovery, Linux integration, and other roadmap items.

@@ -27,9 +27,9 @@ pub use behavior::{
     RuntimeExecutionContext,
 };
 pub use capability::{
-    CapabilityCancellation, CapabilityDescriptor, CapabilityError, CapabilityExecutor,
-    CapabilityKind, CapabilityRegistry, CapabilityRequest, CapabilityRequestStatus,
-    CapabilityResult, RiskLevel, ToolDescriptor,
+    filesystem_read_definition, CapabilityCancellation, CapabilityDescriptor, CapabilityError,
+    CapabilityExecutor, CapabilityKind, CapabilityRegistry, CapabilityRequest,
+    CapabilityRequestStatus, CapabilityResult, RiskLevel, ToolDescriptor,
 };
 pub use context::{
     ContextCompiler, ContextItem, ContextSnapshot, ContextStore, ContextValue, RuntimeContext,

@@ -28,6 +28,8 @@ Owns runtime creation, parent/child hierarchy, lifecycle transitions, mission tr
 
 The kernel must remain deterministic wherever possible. It should not depend on an LLM for lifecycle management or state transitions.
 
+The first real capability is `filesystem.read`. A process-local registration supplies its workspace root and maximum file size; the executor canonicalizes both the root and target, rejects traversal and escapes through symlinks, requires a regular file, and returns structured UTF-8 or binary data. Requests still require a kernel-issued authorization grant and use the existing capability lifecycle events, timeout, cancellation, and audit path.
+
 ### Runtime
 
 A runtime is an execution instance of an agent definition against a specific objective and context.
