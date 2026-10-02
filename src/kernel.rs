@@ -639,7 +639,7 @@ impl Kernel {
         let resulting_state = if no_op {
             runtime.state
         } else {
-            let updated = match self
+            let (_updated, state_event) = match self
                 .transition_runtime_locked(request.runtime_id, next)
                 .await
             {
@@ -670,15 +670,7 @@ impl Kernel {
                 timestamp,
             })
             .await?;
-            self.publish(RuntimeEvent::RuntimeStateChanged {
-                mission_id: updated.mission_id,
-                runtime_id: updated.id,
-                parent_id: updated.parent_id,
-                from: runtime.state,
-                to: next,
-                timestamp,
-            })
-            .await?;
+            self.inner.events.publish_envelope(state_event).await?;
             next
         };
         let applied = AppliedDecision {
@@ -1575,17 +1567,8 @@ impl Kernel {
         next: RuntimeState,
     ) -> Result<Runtime> {
         let _guard = self.lifecycle_lock(runtime_id).await.lock_owned().await;
-        let from = self.get_runtime(runtime_id).await?.state;
-        let runtime = self.transition_runtime_locked(runtime_id, next).await?;
-        self.publish(RuntimeEvent::RuntimeStateChanged {
-            mission_id: runtime.mission_id,
-            runtime_id,
-            parent_id: runtime.parent_id,
-            from,
-            to: next,
-            timestamp: now_millis(),
-        })
-        .await?;
+        let (runtime, event) = self.transition_runtime_locked(runtime_id, next).await?;
+        self.inner.events.publish_envelope(event).await?;
         Ok(runtime)
     }
 
@@ -1593,20 +1576,30 @@ impl Kernel {
         &self,
         runtime_id: RuntimeId,
         next: RuntimeState,
-    ) -> Result<Runtime> {
+    ) -> Result<(Runtime, crate::events::EventEnvelope)> {
         let mut runtime = self.get_runtime(runtime_id).await?;
         let from = runtime.state;
         let expected_updated_at = runtime.updated_at;
         runtime.transition_to(next)?;
+        let event = RuntimeEvent::RuntimeStateChanged {
+            mission_id: runtime.mission_id,
+            runtime_id,
+            parent_id: runtime.parent_id,
+            from,
+            to: next,
+            timestamp: now_millis(),
+        };
+        let envelope = EventBus::envelope(event);
         if !self
             .inner
             .store
-            .compare_and_transition_runtime_state(
+            .compare_and_transition_runtime_state_with_event(
                 runtime_id,
                 from,
                 expected_updated_at,
                 next,
                 runtime.updated_at,
+                &envelope,
             )
             .await?
         {
@@ -1627,7 +1620,7 @@ impl Kernel {
                 }
             }
         }
-        Ok(runtime)
+        Ok((runtime, envelope))
     }
 
     pub async fn complete_runtime(

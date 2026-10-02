@@ -116,7 +116,7 @@ The SQLite-backed kernel stores missions, agents, runtimes and results, event hi
 Agents → Missions → Runtimes → runtime hierarchy and context
 ```
 
-Agents load first because runtimes refer to them by `AgentId`. Runtime records remain the source used to recover runtime state; the event log is not replayed to reconstruct state. Runtime state writes and event-log appends are separate persistence operations, not one atomic transaction. This design provides local durable records, not transactional guarantees across every subsystem.
+Agents load first because runtimes refer to them by `AgentId`. Runtime records remain the source used to recover runtime state; the event log is not replayed to reconstruct state. Versioned SQLite runtime lifecycle transitions and their state-change event appends are committed in one transaction and the committed envelope is broadcast live. Other state mutations and event types remain separate persistence operations, so this is not yet a transactional guarantee across every subsystem.
 
 ## Current boundaries
 
@@ -128,8 +128,8 @@ The decision and behavior interfaces are extension points, not model integration
 
 Stages 1–6D and Stage 7A are implemented. The next planned work is:
 
-1. **Stage 7B — Atomic state and event consistency:** transact critical kernel state changes with their durable events.
-2. **Stage 7C — Scheduler hardening:** address recovery, race, fairness, and concurrency edge cases.
+1. **Stage 7B — Atomic state and event consistency:** extend the SQLite runtime transition transaction to the remaining critical mutations and failure-injection coverage.
+2. **Stage 7C — Scheduler hardening:** reconcile terminal recovery state, then address remaining race, fairness, and concurrency edge cases.
 3. **Stage 7D — First real read-only capability:** implement a narrowly scoped `filesystem.read` path protected by authorization.
 4. **Stage 8 — Skill integration:** define contracts and registry, bridge adapters through capabilities, and demonstrate runtime orchestration.
 5. **Stage 9 — Specialized decision intelligence:** formalize the decision dataset, distill teacher labels, evaluate a specialized Laya `DecisionEngine`, then add conservative local/cloud routing. Kaggle is the preferred GPU training environment for the Stage 9 experiments; authentication and held-out evaluation requirements are documented in the project plan.

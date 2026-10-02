@@ -1269,25 +1269,43 @@ async fn publish_state(
 async fn recover_running(shared: &SchedulerShared) -> Result<()> {
     for entry in shared.store.list().await? {
         if entry.state == SchedulerState::Running {
+            let runtime = shared.kernel.get_runtime(entry.runtime_id).await?;
+            let (next, detail) = match runtime.state {
+                RuntimeState::Completed => (SchedulerState::Completed, None),
+                RuntimeState::Failed => (SchedulerState::Failed, None),
+                RuntimeState::Cancelled => (SchedulerState::Cancelled, None),
+                RuntimeState::TimedOut => (SchedulerState::TimedOut, None),
+                RuntimeState::Interrupted => (SchedulerState::Interrupted, None),
+                _ => (
+                    SchedulerState::Interrupted,
+                    Some("process ended before execution was recorded complete".into()),
+                ),
+            };
+            if next == SchedulerState::Interrupted {
+                shared
+                    .kernel
+                    .mark_runtime_interrupted(entry.runtime_id)
+                    .await?;
+            }
             shared
                 .store
                 .set_state(
                     entry.runtime_id,
                     &[SchedulerState::Running],
-                    SchedulerState::Interrupted,
-                    Some("process ended before execution was recorded complete".into()),
+                    next,
+                    detail,
                     None,
                 )
-                .await?;
-            shared
-                .kernel
-                .mark_runtime_interrupted(entry.runtime_id)
                 .await?;
             if let Ok(Some(updated)) = shared.store.get(entry.runtime_id).await {
                 publish_state(
                     &shared.kernel,
                     &updated,
-                    Some("recovered as interrupted".into()),
+                    if next == SchedulerState::Interrupted {
+                        Some("recovered as interrupted".into())
+                    } else {
+                        Some("reconciled with persisted runtime state".into())
+                    },
                 )
                 .await?;
             }

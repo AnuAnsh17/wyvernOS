@@ -391,7 +391,15 @@ impl EventBus {
     /// channels. This does not make any preceding state mutation transactional
     /// with the event append.
     pub async fn publish(&self, event: RuntimeEvent) -> Result<()> {
-        let envelope = EventEnvelope {
+        let envelope = Self::envelope(event);
+        if let Some(store) = &self.store {
+            store.append_event(&envelope).await?;
+        }
+        self.publish_envelope(envelope).await
+    }
+
+    pub fn envelope(event: RuntimeEvent) -> EventEnvelope {
+        EventEnvelope {
             event_id: EventId::new(),
             event_type: event.event_type().to_string(),
             timestamp: event.timestamp(),
@@ -399,10 +407,11 @@ impl EventBus {
             runtime_id: event.runtime_id(),
             parent_runtime_id: event.parent_id(),
             payload: event.clone(),
-        };
-        if let Some(store) = &self.store {
-            store.append_event(&envelope).await?;
         }
+    }
+
+    pub async fn publish_envelope(&self, envelope: EventEnvelope) -> Result<()> {
+        let event = envelope.payload.clone();
         self.log(&event);
         let _ = self.envelope_sender.send(envelope);
         let _ = self.sender.send(event);

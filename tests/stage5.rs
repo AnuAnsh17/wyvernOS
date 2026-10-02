@@ -807,6 +807,11 @@ async fn schedule_records_survive_restart_and_running_records_recover_as_interru
         .execute(&pool)
         .await
         .unwrap();
+    sqlx::query("UPDATE scheduler_runtime SET state='running' WHERE runtime_id=?1")
+        .bind(root.to_string())
+        .execute(&pool)
+        .await
+        .unwrap();
     sqlx::query("INSERT INTO scheduler_runtime (runtime_id, mission_id, parent_id, state, priority, dependencies_json, attempt, max_retries, retry_delay_ms, timeout_ms, queued_at, started_at, updated_at, not_before, error) VALUES (?1, ?2, NULL, 'running', 2, '[]', 1, 0, 50, 300000, 1, 1, 1, NULL, NULL)")
         .bind(interrupted_runtime.to_string())
         .bind(interrupted_mission.id.to_string())

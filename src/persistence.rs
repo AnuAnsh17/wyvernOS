@@ -127,6 +127,30 @@ pub trait RuntimeStore: Send + Sync {
             "runtime store does not support versioned state transitions".into(),
         ))
     }
+    async fn compare_and_transition_runtime_state_with_event(
+        &self,
+        runtime_id: RuntimeId,
+        expected: RuntimeState,
+        expected_updated_at: i64,
+        next: RuntimeState,
+        updated_at: i64,
+        event: &EventEnvelope,
+    ) -> Result<bool> {
+        if !self
+            .compare_and_transition_runtime_state(
+                runtime_id,
+                expected,
+                expected_updated_at,
+                next,
+                updated_at,
+            )
+            .await?
+        {
+            return Ok(false);
+        }
+        self.append_event(event).await?;
+        Ok(true)
+    }
 }
 
 #[derive(Clone)]
@@ -584,6 +608,52 @@ impl RuntimeStore for SqliteRuntimeStore {
         .execute(&self.pool)
         .await?;
         Ok(result.rows_affected() == 1)
+    }
+
+    async fn compare_and_transition_runtime_state_with_event(
+        &self,
+        runtime_id: RuntimeId,
+        expected: RuntimeState,
+        expected_updated_at: i64,
+        next: RuntimeState,
+        updated_at: i64,
+        event: &EventEnvelope,
+    ) -> Result<bool> {
+        let payload_json = serde_json::to_string(&event.payload)
+            .map_err(|error| WyvernError::InvalidPersistedEvent(error.to_string()))?;
+        let mut transaction = self.pool.begin().await?;
+        let state_update = sqlx::query(
+            "UPDATE runtimes SET state = ?4, updated_at = ?5 WHERE runtime_id = ?1 AND state = ?2 AND updated_at = ?3",
+        )
+        .bind(runtime_id.to_string())
+        .bind(expected.to_string())
+        .bind(expected_updated_at)
+        .bind(next.to_string())
+        .bind(updated_at)
+        .execute(&mut *transaction)
+        .await?;
+        if state_update.rows_affected() != 1 {
+            transaction.rollback().await?;
+            return Ok(false);
+        }
+        sqlx::query(
+            r#"
+            INSERT INTO event_log (
+                event_id, mission_id, runtime_id, parent_id, event_type, timestamp, payload_json
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "#,
+        )
+        .bind(event.event_id.to_string())
+        .bind(event.mission_id.to_string())
+        .bind(event.runtime_id.to_string())
+        .bind(event.parent_runtime_id.map(|id| id.to_string()))
+        .bind(&event.event_type)
+        .bind(event.timestamp)
+        .bind(payload_json)
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(true)
     }
 }
 

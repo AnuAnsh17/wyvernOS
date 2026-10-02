@@ -138,20 +138,22 @@ Known boundary: issuer labels are recorded by the trusted local management API b
 
 ### Stage 7B - Atomic State and Event Consistency
 
-Status: Planned
+Status: In progress
 
 Goals:
 
-- transact critical kernel state changes with corresponding durable event appends
+- transact versioned runtime lifecycle state changes with corresponding durable event appends in SQLite
 - preserve existing compare-and-set runtime version checks
-- test rollback and recovery under injected persistence failures
+- broadcast the exact envelope committed by the transaction
+- extend atomic coverage to remaining critical mutations and injected persistence-failure recovery
 
 ### Stage 7C - Scheduler Hardening
 
-Status: Planned
+Status: In progress
 
 Goals:
 
+- reconcile scheduler recovery with already-terminal kernel runtimes
 - address waiting-parent recovery and dependency dead ends
 - harden timeout, cancellation, retry, and completion races
 - preserve fairness and prevent duplicate claims

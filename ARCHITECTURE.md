@@ -142,7 +142,7 @@ Results are returned as typed `CapabilityResult` values. They are not added to r
 
 The authorization manager creates typed grant IDs and persists issuer identity, subject AgentId, capability, tool set, explicit Mission or Runtime scope, maximum `RiskLevel`, issue/expiration timestamps, and revocation timestamp in SQLite. Risk ordering is enforced during each check. Missing, unknown, mismatched, expired, over-risk, and revoked grants deny invocation. Grant checks are performed against the runtime identity and tool descriptor loaded by the kernel; an optional grant ID on the request only selects which persisted grant to evaluate.
 
-Grant issue, revoke, check, and denial events use the existing durable EventBus/event log. Grant mutation and its corresponding event append remain separate persistence operations; atomic state/event consistency is planned for Stage 7B. Issuer labels are recorded by the local management API but are not authenticated against human/operator credentials. This is a prototype authorization boundary, not a complete production identity or policy system.
+Grant issue, revoke, check, and denial events use the existing durable EventBus/event log. Versioned SQLite runtime lifecycle transitions now commit their state update and state-change event append together, while grant mutations and other event types remain separate operations. Issuer labels are recorded by the local management API but are not authenticated against human/operator credentials. This is a prototype authorization boundary, not a complete production identity or policy system.
 
 ### Stage 5 Scheduler
 
@@ -154,7 +154,7 @@ Dependencies are explicit runtime IDs within the same mission. A dependent is ru
 
 Retry applies only when an executor returns a retryable typed failure and the runtime's explicit retry budget remains. The scheduler uses bounded exponential backoff. Timeouts and cancellation stop awaiting the executor future and release a worker slot; an underlying external operation may require its own cancellation support. Waiting and resumed work invoke the executor again, so executors that use waiting must be restartable or checkpoint their progress.
 
-Scheduler lifecycle changes use the existing EventBus/EventEnvelope. Scheduling metadata is durable; after restart, records left `Running` become `Interrupted`, and persisted runtime state is marked `Interrupted`. They are not automatically resumed because Wyvern cannot assume that in-flight external work survived the process. The scheduler does not write operational status to Memory and does not implement capability execution; executors may use the Stage 4 capability boundary independently.
+Scheduler lifecycle changes use the existing EventBus/EventEnvelope. Scheduling metadata is durable; after restart, records left `Running` are reconciled with the durable kernel runtime: already-terminal runtimes retain their terminal scheduler state, while genuinely nonterminal work becomes `Interrupted`. Work is not automatically resumed because Wyvern cannot assume that in-flight external work survived the process. The scheduler does not write operational status to Memory and does not implement capability execution; executors may use the Stage 4 capability boundary independently.
 
 ### System Adapters
 
