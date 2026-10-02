@@ -225,6 +225,10 @@ Persisted records include:
 
 SQLite with SQLx is the current initial direction.
 
+### Stage 8A Skill Contracts
+
+Skills are typed metadata packages that declare capabilities without becoming kernel authorities. `SkillManifest` is serializable and validates identity, provenance, license, risk, platform, dependency, configuration, and healthcheck metadata. `SkillAdapter` exposes process-local capability bindings and health checks; executable adapters are not persisted or loaded from untrusted metadata. Bound capabilities still execute through the existing kernel authorization and audit path.
+
 ## Unresolved Decisions
 
 The following remain intentionally unresolved and should be documented as the implementation matures:
@@ -235,7 +239,7 @@ The following remain intentionally unresolved and should be documented as the im
 - artifact storage model
 - memory indexing strategy
 - model provider registry shape
-- skill package format
+- skill package installation and registry format
 - security boundary enforcement details
 - TUI layout specifics
 - adapter interface exactness

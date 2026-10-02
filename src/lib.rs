@@ -15,6 +15,7 @@ pub mod memory;
 pub mod persistence;
 pub mod result;
 pub mod scheduler;
+pub mod skills;
 
 pub use agent::{AgentDefinition, AgentId, AgentKind};
 pub use authorization::{
@@ -43,7 +44,8 @@ pub use decision::{
 };
 pub use domain::{
     AuthorizationId, CapabilityId, CapabilityRequestId, DecisionRequestId, EventId, GrantId,
-    MemoryId, Mission, MissionId, MissionState, RuntimeId, RuntimeState, Timestamp, ToolId,
+    MemoryId, Mission, MissionId, MissionState, RuntimeId, RuntimeState, SkillId, Timestamp,
+    ToolId,
 };
 pub use error::{Result, WyvernError};
 pub use kernel::{Kernel, Runtime, RuntimeExecutor, RuntimeHandle, RuntimeRegistry};
@@ -56,4 +58,8 @@ pub use result::{RuntimeOutcome, RuntimeResult};
 pub use scheduler::{
     RuntimeExecutionError, RuntimePriority, ScheduleOptions, ScheduledRuntime,
     ScheduledRuntimeExecutor, Scheduler, SchedulerConfig, SchedulerSnapshot, SchedulerState,
+};
+pub use skills::{
+    SkillAdapter, SkillCapabilityBinding, SkillCapabilityDeclaration, SkillError,
+    SkillHealthReport, SkillHealthStatus, SkillManifest,
 };

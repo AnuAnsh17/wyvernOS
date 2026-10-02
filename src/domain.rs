@@ -24,6 +24,9 @@ pub struct CapabilityId(Uuid);
 pub struct ToolId(Uuid);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SkillId(Uuid);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CapabilityRequestId(Uuid);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -96,6 +99,7 @@ impl_id!(AgentId, "agent_");
 impl_id!(MemoryId, "mem_");
 impl_id!(CapabilityId, "cap_");
 impl_id!(ToolId, "tool_");
+impl_id!(SkillId, "skill_");
 impl_id!(CapabilityRequestId, "creq_");
 impl_id!(AuthorizationId, "authz_");
 impl_id!(GrantId, "grant_");
