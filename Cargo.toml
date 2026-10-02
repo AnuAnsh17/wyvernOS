@@ -7,7 +7,7 @@ description = "Wyvern: a local-first, AI-native orchestration and control system
 readme = "README.md"
 
 [dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
 ratatui = "0.29"
 crossterm = "0.29"
 clap = { version = "4", features = ["derive"] }

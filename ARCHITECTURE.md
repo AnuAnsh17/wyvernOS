@@ -239,6 +239,8 @@ Stage 8D is covered by an offline orchestration path: a decision selects the ski
 
 `Model`, `ModelProvider`, `InferenceRequest`, and `InferenceResponse` are provider-neutral contracts. `ModelRouter` selects registered models by ordered preference, required capabilities, privacy, and estimated output cost, then retries eligible fallback providers after provider failure. Provider implementations remain outside the kernel and can later wrap cloud APIs, local inference, or Laya.
 
+`OpenAiCompatibleProvider` is the first integration edge. It accepts a configured endpoint and optional in-memory API key, sends chat-completion requests, parses structured responses and usage, and does not persist credentials or place provider logic in the kernel.
+
 ## Unresolved Decisions
 
 The following remain intentionally unresolved and should be documented as the implementation matures:

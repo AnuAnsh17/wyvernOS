@@ -192,6 +192,7 @@ Foundation implemented:
 
 - provider-neutral `Model`, `ModelProvider`, `InferenceRequest`, and `InferenceResponse` contracts
 - deterministic `ModelRouter` policy filtering with privacy, capability, cost, preferred-model, and provider-failure fallback rules
+- OpenAI-compatible HTTP provider with deterministic loopback coverage
 
 Sub-stages:
 

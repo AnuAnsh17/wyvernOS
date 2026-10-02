@@ -1,6 +1,7 @@
 //! Provider-neutral model contracts and deterministic routing.
 
 use async_trait::async_trait;
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -120,6 +121,109 @@ pub trait ModelProvider: Send + Sync {
         model: &Model,
         request: InferenceRequest,
     ) -> Result<InferenceResponse, ModelError>;
+}
+
+#[derive(Clone)]
+pub struct OpenAiCompatibleProvider {
+    name: String,
+    endpoint: String,
+    api_key: Option<String>,
+    client: Client,
+}
+
+impl OpenAiCompatibleProvider {
+    pub fn new(name: impl Into<String>, endpoint: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            endpoint: endpoint.into().trim_end_matches('/').to_owned(),
+            api_key: None,
+            client: Client::new(),
+        }
+    }
+
+    pub fn with_api_key(mut self, api_key: impl Into<String>) -> Self {
+        self.api_key = Some(api_key.into());
+        self
+    }
+}
+
+#[async_trait]
+impl ModelProvider for OpenAiCompatibleProvider {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    async fn infer(
+        &self,
+        model: &Model,
+        request: InferenceRequest,
+    ) -> Result<InferenceResponse, ModelError> {
+        let mut messages = Vec::new();
+        if let Some(system_prompt) = request.system_prompt {
+            messages.push(serde_json::json!({
+                "role": "system",
+                "content": system_prompt,
+            }));
+        }
+        messages.push(serde_json::json!({
+            "role": "user",
+            "content": request.prompt,
+        }));
+        let mut body = serde_json::json!({
+            "model": model.id,
+            "messages": messages,
+        });
+        if let Some(max_tokens) = request.max_tokens {
+            body["max_tokens"] = serde_json::json!(max_tokens);
+        }
+        if let Some(temperature) = request.temperature {
+            body["temperature"] = serde_json::json!(temperature);
+        }
+        let mut call = self
+            .client
+            .post(format!("{}/chat/completions", self.endpoint))
+            .json(&body);
+        if let Some(api_key) = &self.api_key {
+            call = call.bearer_auth(api_key);
+        }
+        let response = call
+            .send()
+            .await
+            .map_err(|error| ModelError::Provider(error.to_string()))?
+            .error_for_status()
+            .map_err(|error| ModelError::Provider(error.to_string()))?;
+        let payload: Value = response
+            .json()
+            .await
+            .map_err(|error| ModelError::Provider(error.to_string()))?;
+        let text = payload
+            .pointer("/choices/0/message/content")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                ModelError::Provider("response did not contain message content".into())
+            })?;
+        let usage = ModelUsage {
+            input_tokens: payload
+                .pointer("/usage/prompt_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or_default(),
+            output_tokens: payload
+                .pointer("/usage/completion_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or_default(),
+            cost_usd: None,
+        };
+        Ok(InferenceResponse {
+            model_id: model.id.clone(),
+            text: text.to_owned(),
+            usage,
+            finish_reason: payload
+                .pointer("/choices/0/finish_reason")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            metadata: BTreeMap::new(),
+        })
+    }
 }
 
 #[derive(Clone)]

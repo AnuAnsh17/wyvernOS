@@ -56,7 +56,7 @@ pub use memory::{
 };
 pub use models::{
     InferenceRequest, InferenceResponse, Model, ModelCapability, ModelError, ModelPolicy,
-    ModelPrivacy, ModelProvider, ModelRouter, ModelUsage,
+    ModelPrivacy, ModelProvider, ModelRouter, ModelUsage, OpenAiCompatibleProvider,
 };
 pub use persistence::StoredEvent;
 pub use result::{RuntimeOutcome, RuntimeResult};

@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use wyvern::models::{
     InferenceRequest, InferenceResponse, Model, ModelCapability, ModelError, ModelPolicy,
-    ModelPrivacy, ModelProvider, ModelRouter, ModelUsage,
+    ModelPrivacy, ModelProvider, ModelRouter, ModelUsage, OpenAiCompatibleProvider,
 };
 
 struct MockProvider {
@@ -130,4 +130,39 @@ async fn model_registration_requires_provider_and_rejects_duplicates() {
             .await,
         Err(ModelError::DuplicateModel(id)) if id == "local-model"
     ));
+}
+
+#[tokio::test]
+async fn openai_compatible_provider_parses_a_chat_completion() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0u8; 8192];
+        let _ = socket.read(&mut request).await.unwrap();
+        let payload = r#"{"choices":[{"message":{"content":"hello from gateway"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":4}}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            payload.len(),
+            payload
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
+    });
+
+    let provider = OpenAiCompatibleProvider::new("gateway", format!("http://{address}/v1/"));
+    let response = provider
+        .infer(
+            &model("frontier", "gateway", ModelPrivacy::Public),
+            InferenceRequest::new("test", "say hello"),
+        )
+        .await
+        .unwrap();
+    server.await.unwrap();
+    assert_eq!(response.text, "hello from gateway");
+    assert_eq!(response.usage.input_tokens, 3);
+    assert_eq!(response.usage.output_tokens, 4);
+    assert_eq!(response.finish_reason.as_deref(), Some("stop"));
 }
