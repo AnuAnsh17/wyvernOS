@@ -186,7 +186,12 @@ Skills are integrations that expose capabilities; they are not runtimes, agents,
 
 ## Stage 9 - Specialized Decision Intelligence
 
-Status: Planned
+Status: In progress
+
+Foundation implemented:
+
+- provider-neutral `Model`, `ModelProvider`, `InferenceRequest`, and `InferenceResponse` contracts
+- deterministic `ModelRouter` policy filtering with privacy, capability, cost, preferred-model, and provider-failure fallback rules
 
 Sub-stages:
 

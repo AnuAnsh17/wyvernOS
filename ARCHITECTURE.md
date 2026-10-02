@@ -235,6 +235,10 @@ Stage 8C adds an explicit install bridge from a bound adapter to `CapabilityRegi
 
 Stage 8D is covered by an offline orchestration path: a decision selects the skill action, the kernel-issued grant authorizes execution, the structured capability result enters runtime context, and SQLite restart hydration recovers the runtime and context. No model provider or autonomous planner is implied by this demo.
 
+### Stage 9 Model Routing Foundation
+
+`Model`, `ModelProvider`, `InferenceRequest`, and `InferenceResponse` are provider-neutral contracts. `ModelRouter` selects registered models by ordered preference, required capabilities, privacy, and estimated output cost, then retries eligible fallback providers after provider failure. Provider implementations remain outside the kernel and can later wrap cloud APIs, local inference, or Laya.
+
 ## Unresolved Decisions
 
 The following remain intentionally unresolved and should be documented as the implementation matures:

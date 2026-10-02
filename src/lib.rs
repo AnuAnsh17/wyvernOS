@@ -12,6 +12,7 @@ pub mod error;
 pub mod events;
 pub mod kernel;
 pub mod memory;
+pub mod models;
 pub mod persistence;
 pub mod result;
 pub mod scheduler;
@@ -52,6 +53,10 @@ pub use kernel::{Kernel, Runtime, RuntimeExecutor, RuntimeHandle, RuntimeRegistr
 pub use memory::{
     MemoryDraft, MemoryItem, MemoryMetadata, MemoryMetadataValue, MemoryProvenance, MemoryQuery,
     MemoryScope, MemoryStatus, MemoryStore, MemoryType,
+};
+pub use models::{
+    InferenceRequest, InferenceResponse, Model, ModelCapability, ModelError, ModelPolicy,
+    ModelPrivacy, ModelProvider, ModelRouter, ModelUsage,
 };
 pub use persistence::StoredEvent;
 pub use result::{RuntimeOutcome, RuntimeResult};
