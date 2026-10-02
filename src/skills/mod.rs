@@ -1,6 +1,8 @@
 //! Typed contracts for reusable capability packages.
 
-use crate::capability::{CapabilityDescriptor, CapabilityExecutor, RiskLevel, ToolDescriptor};
+use crate::capability::{
+    CapabilityDescriptor, CapabilityExecutor, CapabilityRegistry, RiskLevel, ToolDescriptor,
+};
 use crate::domain::{CapabilityId, SkillId};
 use crate::error::WyvernError;
 use crate::persistence::RuntimeStore;
@@ -185,6 +187,26 @@ impl SkillRegistry {
         }
         self.adapters.write().await.insert(manifest.id, adapter);
         Ok(())
+    }
+
+    pub async fn install_adapter(
+        &self,
+        adapter: Arc<dyn SkillAdapter>,
+        capabilities: &CapabilityRegistry,
+    ) -> Result<Vec<SkillCapabilityBinding>, SkillError> {
+        self.bind_adapter(adapter.clone()).await?;
+        let bindings = adapter.capability_bindings().await?;
+        for binding in &bindings {
+            capabilities
+                .register(
+                    binding.descriptor.clone(),
+                    binding.tools.clone(),
+                    binding.executor.clone(),
+                )
+                .await
+                .map_err(|error| SkillError::BindingFailed(error.to_string()))?;
+        }
+        Ok(bindings)
     }
 
     pub async fn adapter(&self, skill_id: SkillId) -> Option<Arc<dyn SkillAdapter>> {

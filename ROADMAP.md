@@ -179,7 +179,7 @@ Sub-stages:
 
 - **8A:** typed Skill identity, metadata, capability declarations, and adapter contract (Implemented)
 - **8B:** metadata registry, lookup/resolution, persistence, and process-local adapter binding (Implemented)
-- **8C:** bridge adapters through the existing capability and authorization path; use an offline mock skill
+- **8C:** bridge adapters through the existing capability and authorization path; use an offline mock skill (Implemented)
 - **8D:** runtime skill orchestration demo with decisions, authorization, result propagation, and restart coverage
 
 Skills are integrations that expose capabilities; they are not runtimes, agents, models, or kernel authorities. Executable adapter objects remain process-local.

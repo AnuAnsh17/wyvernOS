@@ -1,7 +1,10 @@
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
+use wyvern::authorization::{AuthorizationGrantDraft, AuthorizationIssuer, AuthorizationScope};
 use wyvern::capability::mock_echo_definition;
+use wyvern::capability::{CapabilityCancellation, CapabilityRequest, CapabilityRequestStatus};
+use wyvern::kernel::Kernel;
 use wyvern::persistence::SqliteRuntimeStore;
 use wyvern::skills::{
     SkillAdapter, SkillCapabilityBinding, SkillCapabilityDeclaration, SkillHealthReport,
@@ -153,6 +156,77 @@ async fn skill_registry_rejects_unregistered_and_mismatched_adapters() {
             .await,
         Err(wyvern::SkillError::BindingFailed(message)) if message.contains(&skill_id.to_string())
     ));
+}
+
+#[tokio::test]
+async fn installed_skill_capability_still_requires_kernel_authorization() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("skills.sqlite");
+    let store = Arc::new(SqliteRuntimeStore::open(&database).await.unwrap());
+    let kernel = Kernel::new(store.clone()).await.unwrap();
+    let registry = SkillRegistry::new(store);
+    let skill_manifest = manifest();
+    registry
+        .register_manifest(skill_manifest.clone())
+        .await
+        .unwrap();
+    let bindings = registry
+        .install_adapter(
+            Arc::new(MockSkillAdapter {
+                manifest: skill_manifest,
+            }),
+            &kernel.capabilities(),
+        )
+        .await
+        .unwrap();
+    let binding = &bindings[0];
+    let mission = kernel.create_mission("skill authorization").await.unwrap();
+    let agent = kernel
+        .register_agent(wyvern::AgentDefinition::new(
+            "skill worker",
+            wyvern::AgentKind::WorkerA,
+        ))
+        .await
+        .unwrap();
+    let runtime = kernel
+        .create_runtime(mission.id, None, &agent, "invoke skill")
+        .await
+        .unwrap();
+
+    let mut request = CapabilityRequest::new(
+        runtime.id(),
+        mission.id,
+        binding.descriptor.id,
+        binding.tools[0].id,
+        json!({"message": "without grant"}),
+    );
+    let rejected = kernel
+        .execute_capability(request.clone(), &CapabilityCancellation::new())
+        .await
+        .unwrap();
+    assert_eq!(rejected.status, CapabilityRequestStatus::Rejected);
+
+    let grant = kernel
+        .issue_authorization_grant(
+            runtime.id(),
+            AuthorizationGrantDraft {
+                issuer: AuthorizationIssuer::Runtime(runtime.id()),
+                subject_agent_id: agent.id,
+                capability_id: binding.descriptor.id,
+                allowed_tools: vec![binding.tools[0].id],
+                scope: AuthorizationScope::Runtime(runtime.id()),
+                maximum_risk: RiskLevel::Low,
+                expires_at: None,
+            },
+        )
+        .await
+        .unwrap();
+    request.authorization_grant_id = Some(grant.id);
+    let allowed = kernel
+        .execute_capability(request, &CapabilityCancellation::new())
+        .await
+        .unwrap();
+    assert_eq!(allowed.status, CapabilityRequestStatus::Succeeded);
 }
 
 #[test]

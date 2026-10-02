@@ -231,6 +231,8 @@ Skills are typed metadata packages that declare capabilities without becoming ke
 
 The Stage 8B `SkillRegistry` persists validated manifests in SQLite and resolves them by `SkillId`. Adapter objects are held only in memory and must be explicitly rebound after restart; binding requires the adapter manifest to exactly match the registered metadata. The registry does not automatically register capabilities or grant permissions.
 
+Stage 8C adds an explicit install bridge from a bound adapter to `CapabilityRegistry`. Installing a skill registers its declared executable bindings only; requests still pass through `Kernel::execute_capability`, including runtime-scoped authorization, risk checks, cancellation, timeout, and audit events.
+
 ## Unresolved Decisions
 
 The following remain intentionally unresolved and should be documented as the implementation matures:
