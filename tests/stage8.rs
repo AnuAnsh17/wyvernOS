@@ -2,9 +2,10 @@ use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
 use wyvern::capability::mock_echo_definition;
+use wyvern::persistence::SqliteRuntimeStore;
 use wyvern::skills::{
     SkillAdapter, SkillCapabilityBinding, SkillCapabilityDeclaration, SkillHealthReport,
-    SkillHealthStatus, SkillManifest,
+    SkillHealthStatus, SkillManifest, SkillRegistry,
 };
 use wyvern::{CapabilityDescriptor, CapabilityExecutor, CapabilityKind, RiskLevel};
 
@@ -86,6 +87,72 @@ async fn adapter_exposes_process_local_bindings_and_health() {
         adapter.healthcheck().await.unwrap().status,
         SkillHealthStatus::Healthy
     );
+}
+
+#[tokio::test]
+async fn skill_metadata_survives_restart_but_adapter_binding_does_not() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("skills.sqlite");
+    let store = Arc::new(SqliteRuntimeStore::open(&database).await.unwrap());
+    let registry = SkillRegistry::new(store);
+    let manifest = manifest();
+    let skill_id = manifest.id;
+    registry.register_manifest(manifest.clone()).await.unwrap();
+    registry
+        .bind_adapter(Arc::new(MockSkillAdapter {
+            manifest: manifest.clone(),
+        }))
+        .await
+        .unwrap();
+    assert!(registry.adapter(skill_id).await.is_some());
+
+    drop(registry);
+    let reopened_store = Arc::new(SqliteRuntimeStore::open(&database).await.unwrap());
+    let reopened = SkillRegistry::new(reopened_store);
+    assert_eq!(
+        reopened.get(skill_id).await.unwrap(),
+        Some(manifest.clone())
+    );
+    assert!(reopened.adapter(skill_id).await.is_none());
+    reopened
+        .bind_adapter(Arc::new(MockSkillAdapter { manifest }))
+        .await
+        .unwrap();
+    assert!(reopened.adapter(skill_id).await.is_some());
+}
+
+#[tokio::test]
+async fn skill_registry_rejects_unregistered_and_mismatched_adapters() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("skills.sqlite");
+    let store = Arc::new(SqliteRuntimeStore::open(&database).await.unwrap());
+    let registry = SkillRegistry::new(store);
+    let unregistered = manifest();
+    assert!(matches!(
+        registry
+            .bind_adapter(Arc::new(MockSkillAdapter {
+                manifest: unregistered,
+            }))
+            .await,
+        Err(wyvern::SkillError::Registry(_))
+    ));
+
+    let registered = manifest();
+    let skill_id = registered.id;
+    registry
+        .register_manifest(registered.clone())
+        .await
+        .unwrap();
+    let mut mismatched = registered;
+    mismatched.version = "9.9.9".into();
+    assert!(matches!(
+        registry
+            .bind_adapter(Arc::new(MockSkillAdapter {
+                manifest: mismatched,
+            }))
+            .await,
+        Err(wyvern::SkillError::BindingFailed(message)) if message.contains(&skill_id.to_string())
+    ));
 }
 
 #[test]

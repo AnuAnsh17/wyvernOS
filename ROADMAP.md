@@ -178,7 +178,7 @@ Status: In progress
 Sub-stages:
 
 - **8A:** typed Skill identity, metadata, capability declarations, and adapter contract (Implemented)
-- **8B:** metadata registry, lookup/resolution, persistence, and process-local adapter binding
+- **8B:** metadata registry, lookup/resolution, persistence, and process-local adapter binding (Implemented)
 - **8C:** bridge adapters through the existing capability and authorization path; use an offline mock skill
 - **8D:** runtime skill orchestration demo with decisions, authorization, result propagation, and restart coverage
 

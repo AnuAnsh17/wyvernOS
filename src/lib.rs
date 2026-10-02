@@ -61,5 +61,5 @@ pub use scheduler::{
 };
 pub use skills::{
     SkillAdapter, SkillCapabilityBinding, SkillCapabilityDeclaration, SkillError,
-    SkillHealthReport, SkillHealthStatus, SkillManifest,
+    SkillHealthReport, SkillHealthStatus, SkillManifest, SkillRegistry,
 };

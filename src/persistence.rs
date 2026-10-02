@@ -1,10 +1,11 @@
 use crate::agent::AgentDefinition;
 use crate::domain::{
-    AgentId, EventId, GrantId, Mission, MissionId, MissionState, RuntimeId, RuntimeState,
+    AgentId, EventId, GrantId, Mission, MissionId, MissionState, RuntimeId, RuntimeState, SkillId,
 };
 use crate::error::{Result, WyvernError};
 use crate::events::{EventEnvelope, RuntimeEvent};
 use crate::result::RuntimeResult;
+use crate::skills::SkillManifest;
 use crate::Runtime;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -58,6 +59,12 @@ pub struct PersistedAuthorizationGrant {
     pub revoked_at: Option<i64>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, FromRow)]
+pub struct PersistedSkill {
+    pub skill_id: String,
+    pub manifest_json: String,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct StoredEvent {
     pub sequence_id: i64,
@@ -103,6 +110,9 @@ pub trait RuntimeStore: Send + Sync {
     ) -> Result<Option<PersistedAuthorizationGrant>>;
     async fn list_authorization_grants(&self) -> Result<Vec<PersistedAuthorizationGrant>>;
     async fn revoke_authorization_grant(&self, grant_id: GrantId, revoked_at: i64) -> Result<bool>;
+    async fn insert_skill_manifest(&self, manifest: &SkillManifest) -> Result<()>;
+    async fn get_skill_manifest(&self, skill_id: SkillId) -> Result<Option<SkillManifest>>;
+    async fn list_skill_manifests(&self) -> Result<Vec<SkillManifest>>;
     async fn update_runtime_state(
         &self,
         _runtime_id: RuntimeId,
@@ -264,6 +274,16 @@ impl SqliteRuntimeStore {
                 issued_at INTEGER NOT NULL,
                 expires_at INTEGER NULL,
                 revoked_at INTEGER NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS skills (
+                skill_id TEXT PRIMARY KEY,
+                manifest_json TEXT NOT NULL
             )
             "#,
         )
@@ -568,6 +588,51 @@ impl RuntimeStore for SqliteRuntimeStore {
         .execute(&self.pool)
         .await?;
         Ok(result.rows_affected() == 1)
+    }
+
+    async fn insert_skill_manifest(&self, manifest: &SkillManifest) -> Result<()> {
+        let manifest_json = serde_json::to_string(manifest)
+            .map_err(|error| WyvernError::ExecutionError(error.to_string()))?;
+        let result = sqlx::query("INSERT INTO skills (skill_id, manifest_json) VALUES (?1, ?2)")
+            .bind(manifest.id.to_string())
+            .bind(manifest_json)
+            .execute(&self.pool)
+            .await;
+        match result {
+            Ok(_) => Ok(()),
+            Err(sqlx::Error::Database(error)) if error.is_unique_violation() => Err(
+                WyvernError::ExecutionError(format!("skill already exists: {}", manifest.id)),
+            ),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    async fn get_skill_manifest(&self, skill_id: SkillId) -> Result<Option<SkillManifest>> {
+        let row = sqlx::query_as::<_, PersistedSkill>(
+            "SELECT skill_id, manifest_json FROM skills WHERE skill_id = ?1",
+        )
+        .bind(skill_id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|persisted| {
+            serde_json::from_str(&persisted.manifest_json)
+                .map_err(|error| WyvernError::ExecutionError(error.to_string()))
+        })
+        .transpose()
+    }
+
+    async fn list_skill_manifests(&self) -> Result<Vec<SkillManifest>> {
+        let rows = sqlx::query_as::<_, PersistedSkill>(
+            "SELECT skill_id, manifest_json FROM skills ORDER BY skill_id ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|persisted| {
+                serde_json::from_str(&persisted.manifest_json)
+                    .map_err(|error| WyvernError::ExecutionError(error.to_string()))
+            })
+            .collect()
     }
 
     async fn update_runtime_state(

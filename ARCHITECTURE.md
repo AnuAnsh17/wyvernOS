@@ -229,6 +229,8 @@ SQLite with SQLx is the current initial direction.
 
 Skills are typed metadata packages that declare capabilities without becoming kernel authorities. `SkillManifest` is serializable and validates identity, provenance, license, risk, platform, dependency, configuration, and healthcheck metadata. `SkillAdapter` exposes process-local capability bindings and health checks; executable adapters are not persisted or loaded from untrusted metadata. Bound capabilities still execute through the existing kernel authorization and audit path.
 
+The Stage 8B `SkillRegistry` persists validated manifests in SQLite and resolves them by `SkillId`. Adapter objects are held only in memory and must be explicitly rebound after restart; binding requires the adapter manifest to exactly match the registered metadata. The registry does not automatically register capabilities or grant permissions.
+
 ## Unresolved Decisions
 
 The following remain intentionally unresolved and should be documented as the implementation matures:

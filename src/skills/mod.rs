@@ -2,11 +2,15 @@
 
 use crate::capability::{CapabilityDescriptor, CapabilityExecutor, RiskLevel, ToolDescriptor};
 use crate::domain::{CapabilityId, SkillId};
+use crate::error::WyvernError;
+use crate::persistence::RuntimeStore;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::sync::Arc;
 use thiserror::Error;
+use tokio::sync::RwLock;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SkillManifest {
@@ -122,6 +126,74 @@ pub enum SkillError {
     HealthcheckFailed(String),
     #[error("skill capability binding failed: {0}")]
     BindingFailed(String),
+    #[error("skill registry error: {0}")]
+    Registry(String),
+    #[error("skill persistence failed: {0}")]
+    Persistence(String),
+}
+
+#[derive(Clone)]
+pub struct SkillRegistry {
+    store: Arc<dyn RuntimeStore>,
+    adapters: Arc<RwLock<HashMap<SkillId, Arc<dyn SkillAdapter>>>>,
+}
+
+impl SkillRegistry {
+    pub fn new(store: Arc<dyn RuntimeStore>) -> Self {
+        Self {
+            store,
+            adapters: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    pub async fn register_manifest(&self, manifest: SkillManifest) -> Result<(), SkillError> {
+        manifest.validate()?;
+        self.store
+            .insert_skill_manifest(&manifest)
+            .await
+            .map_err(storage_error)
+    }
+
+    pub async fn get(&self, skill_id: SkillId) -> Result<Option<SkillManifest>, SkillError> {
+        self.store
+            .get_skill_manifest(skill_id)
+            .await
+            .map_err(storage_error)
+    }
+
+    pub async fn list(&self) -> Result<Vec<SkillManifest>, SkillError> {
+        self.store
+            .list_skill_manifests()
+            .await
+            .map_err(storage_error)
+    }
+
+    pub async fn bind_adapter(&self, adapter: Arc<dyn SkillAdapter>) -> Result<(), SkillError> {
+        let manifest = adapter.manifest();
+        manifest.validate()?;
+        let Some(persisted) = self.get(manifest.id).await? else {
+            return Err(SkillError::Registry(format!(
+                "skill manifest is not registered: {}",
+                manifest.id
+            )));
+        };
+        if persisted != *manifest {
+            return Err(SkillError::BindingFailed(format!(
+                "adapter metadata does not match registered skill: {}",
+                manifest.id
+            )));
+        }
+        self.adapters.write().await.insert(manifest.id, adapter);
+        Ok(())
+    }
+
+    pub async fn adapter(&self, skill_id: SkillId) -> Option<Arc<dyn SkillAdapter>> {
+        self.adapters.read().await.get(&skill_id).cloned()
+    }
+}
+
+fn storage_error(error: WyvernError) -> SkillError {
+    SkillError::Persistence(error.to_string())
 }
 
 #[async_trait]
