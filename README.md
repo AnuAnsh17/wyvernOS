@@ -2,7 +2,7 @@
 
 WyvernOS is a local-first AI orchestration and control-plane runtime. It coordinates persistent missions and recursive runtime instances while keeping lifecycle management, context propagation, scheduling, capabilities, and persistence in deterministic software.
 
-WyvernOS is not an LLM. Models are external decision or reasoning providers. The runtime kernel owns identity, lifecycle, hierarchy, persistence, scheduling, context and memory boundaries, capability boundaries, decision validation and application, behavior execution, and event history. This repository implements the control-plane foundations through Stage 6D; it does not yet include model routing or Laya.
+WyvernOS is not an LLM. Models are external decision or reasoning providers. The runtime kernel owns identity, lifecycle, hierarchy, persistence, scheduling, context and memory boundaries, capability boundaries, decision validation and application, behavior execution, authorization checks, and event history. This repository implements the control-plane foundations through Stage 7A; it does not yet include model routing or Laya.
 
 ## Architectural model
 
@@ -30,6 +30,9 @@ flowchart TD
     R --> B[Registered Runtime Behavior]
     B --> D[DecisionEngine proposal]
     D --> K[Kernel validates and applies]
+    R --> Z[Kernel authorization]
+    Z --> C[Capability executor]
+    C --> K
     K --> S[(SQLite state stores)]
     K --> E[RuntimeEvent]
     E --> V[EventEnvelope]
@@ -57,7 +60,7 @@ Memory is typed, durable structured state with scope, provenance, status, and li
 
 The capability module provides typed capability, tool, and request IDs; descriptors with input/output schemas and risk metadata; a registry and executor interface; typed requests and results; and request lifecycle events. Callers explicitly select results for context or convert successful results into memory drafts.
 
-`CapabilityPermission` checks are supplied by the caller. There is no durable authorization or grant subsystem, so production authorization and security enforcement are not complete. `mock.echo` is a test executor; no production browser, filesystem, process, network, model, or OS executor is registered by default.
+`mock.echo` is a test executor; no production browser, filesystem, process, network, model, or OS executor is registered by default. Kernel-owned durable grants are described under Stage 7A below.
 
 ### Stage 5 — Scheduler
 
@@ -82,6 +85,14 @@ The kernel currently applies the bounded `RuntimeLifecycle` decision type. It va
 **Event history:** With persistent storage configured, publishing a `RuntimeEvent` creates an `EventEnvelope`, appends it to SQLite, and then broadcasts it to live subscribers. The envelope includes a typed UUIDv7 `EventId`, event type, timestamp, mission ID, runtime ID, parent runtime ID, and typed serialized event payload. The SQLite row also receives an ordered `sequence_id`. Recovery validates that persisted envelope metadata agrees with its payload.
 
 The kernel exposes history queries for all persisted events, one runtime, or one mission. `EventBus` remains the live asynchronous broadcast mechanism; the durable event log is a separate historical inspection mechanism.
+
+### Stage 7A — Kernel-Owned Authorization
+
+The kernel issues and persists typed authorization grants. A grant records its ID, issuer, subject `AgentId`, capability, allowed tools, mission or runtime scope, maximum permitted tool risk, issue time, optional expiration, and revocation time. A capability caller can select a grant ID on its request, but that ID is only a reference: the kernel loads and checks the durable grant, resolves the agent from the runtime, and obtains risk from the registered `ToolDescriptor`. The caller cannot pass a constructed permission object or authorization decision to the executor.
+
+Checks reject missing or unknown grants, a different agent, capability, tool or scope, excessive risk, expired grants, and revoked grants. Grant issuance and revocation are exposed through explicit kernel management methods and produce durable authorization events through the existing EventBus/event log. Stage 7A tests cover invocation decisions, expiry, revocation, restart recovery, and event history.
+
+This is an authorization foundation, not a production identity system. The current management API permits runtime-mediated issuance only and binds a runtime issuer to the issuing runtime; WyvernOS does not authenticate human/operator accounts. Grant writes and their corresponding event appends are separate operations until the planned atomic persistence work in Stage 7B.
 
 ## Context, memory, and events
 
@@ -109,28 +120,28 @@ Agents load first because runtimes refer to them by `AgentId`. Runtime records r
 
 ## Current boundaries
 
-Stages 1–6D establish local orchestration infrastructure. They do not implement event sourcing or replay-driven state reconstruction, atomic runtime-state/event commits, distributed event storage, distributed runtimes, multi-node orchestration, or persistent executable behavior objects and dynamic behavior loading. Model routing, Laya, real browser automation, production tool execution, and durable authorization are also outside the current implementation.
+Stages 1–7A establish local orchestration infrastructure. They do not implement event sourcing or replay-driven state reconstruction, atomic state/event commits, distributed event storage, distributed runtimes, multi-node orchestration, or persistent executable behavior objects and dynamic behavior loading. Model routing, Laya, real browser automation, and production tool execution remain outside the current implementation. Stage 7A does not provide authenticated operator identities or production-grade authorization policy management.
 
 The decision and behavior interfaces are extension points, not model integrations. The capability boundary is not a complete security system. The project is not an operating-system kernel and does not provide unrestricted computer control.
 
 ## Roadmap
 
-Stages 1–6D are implemented. The repository roadmap’s next planned work remains:
+Stages 1–6D and Stage 7A are implemented. The next planned work is:
 
-1. **Model Router:** provider abstraction and policy-driven selection of external reasoning providers.
-2. **Laya Integration:** a fast decision provider kept separate from reasoning.
-3. **TUI:** a view over missions, runtime hierarchy, agents, events, and system status.
-4. **Browser and application control:** controlled integration boundaries for browsers and local applications.
-5. **Skills and advanced agents:** reusable task packages and higher-level agent roles.
-6. **Reliability and OS integration:** further recovery, checkpointing, permission, isolation, and Linux integration work.
+1. **Stage 7B — Atomic state and event consistency:** transact critical kernel state changes with their durable events.
+2. **Stage 7C — Scheduler hardening:** address recovery, race, fairness, and concurrency edge cases.
+3. **Stage 7D — First real read-only capability:** implement a narrowly scoped `filesystem.read` path protected by authorization.
+4. **Stage 8 — Skill integration:** define contracts and registry, bridge adapters through capabilities, and demonstrate runtime orchestration.
+5. **Stage 9 — Specialized decision intelligence:** formalize the decision dataset, distill teacher labels, evaluate a specialized Laya `DecisionEngine`, then add conservative local/cloud routing. Kaggle is the preferred GPU training environment for the Stage 9 experiments; authentication and held-out evaluation requirements are documented in the project plan.
+6. **Later work:** TUI, broader application control, deeper recovery, Linux integration, and other roadmap items.
 
 These are roadmap items, not implemented capabilities. See [ROADMAP.md](ROADMAP.md) and [ARCHITECTURE.md](ARCHITECTURE.md) for project planning and component boundaries.
 
 ## Tests
 
-Stage-specific integration tests cover the implemented architecture from the runtime kernel through Stage 6D. Stage 6D tests exercise agent persistence and identity preservation, runtime hierarchy recovery, duplicate-agent rejection, event persistence and ordering, unique event IDs, runtime and mission filters, and persisted decision events. Other stage tests cover context and snapshot behavior, scoped memory, capability requests, scheduler coordination, decision validation, and behavior execution.
+Stage-specific integration tests cover the implemented architecture from the runtime kernel through Stage 7A. Stage 6D tests exercise agent persistence and identity preservation, runtime hierarchy recovery, duplicate-agent rejection, event persistence and ordering, unique event IDs, runtime and mission filters, and persisted decision events. Stage 7A tests cover grant validation, agent/runtime/capability/tool/scope/risk matching, unauthorized and authorized invocation, expiration, revocation, SQLite recovery, duplicate grants, and authorization events. Other stage tests cover context and snapshots, scoped memory, scheduler coordination, decision validation, and behavior execution.
 
-Run the Rust checks and test suite with:
+Run the focused authorization checks with `cargo test --test stage7a`, or run the complete Rust checks and test suite with:
 
 ```bash
 cargo fmt --check

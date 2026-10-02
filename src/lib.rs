@@ -1,6 +1,7 @@
 //! Wyvern core library surface.
 
 pub mod agent;
+pub mod authorization;
 pub mod behavior;
 pub mod capability;
 pub mod cli;
@@ -16,6 +17,10 @@ pub mod result;
 pub mod scheduler;
 
 pub use agent::{AgentDefinition, AgentId, AgentKind};
+pub use authorization::{
+    AuthorizationDecision, AuthorizationDenialReason, AuthorizationGrant, AuthorizationGrantDraft,
+    AuthorizationIssuer, AuthorizationScope,
+};
 pub use behavior::demo::{PauseGate, RuntimeHooks};
 pub use behavior::{
     BehaviorError, BehaviorRuntimeHandle, RuntimeBehavior, RuntimeBehaviorRegistry,
@@ -23,8 +28,8 @@ pub use behavior::{
 };
 pub use capability::{
     CapabilityCancellation, CapabilityDescriptor, CapabilityError, CapabilityExecutor,
-    CapabilityKind, CapabilityPermission, CapabilityPermissionScope, CapabilityRegistry,
-    CapabilityRequest, CapabilityRequestStatus, CapabilityResult, RiskLevel, ToolDescriptor,
+    CapabilityKind, CapabilityRegistry, CapabilityRequest, CapabilityRequestStatus,
+    CapabilityResult, RiskLevel, ToolDescriptor,
 };
 pub use context::{
     ContextCompiler, ContextItem, ContextSnapshot, ContextStore, ContextValue, RuntimeContext,
@@ -37,8 +42,8 @@ pub use decision::{
     DecisionRuntimeState, DecisionType, MockDecisionEngine,
 };
 pub use domain::{
-    CapabilityId, CapabilityRequestId, DecisionRequestId, EventId, MemoryId, Mission, MissionId,
-    MissionState, RuntimeId, RuntimeState, Timestamp, ToolId,
+    AuthorizationId, CapabilityId, CapabilityRequestId, DecisionRequestId, EventId, GrantId,
+    MemoryId, Mission, MissionId, MissionState, RuntimeId, RuntimeState, Timestamp, ToolId,
 };
 pub use error::{Result, WyvernError};
 pub use kernel::{Kernel, Runtime, RuntimeExecutor, RuntimeHandle, RuntimeRegistry};

@@ -5,10 +5,11 @@ use tempfile::TempDir;
 
 use serde_json::json;
 use wyvern::agent::{AgentDefinition, AgentKind};
+use wyvern::authorization::{AuthorizationGrantDraft, AuthorizationIssuer, AuthorizationScope};
 use wyvern::capability::{
     mock_echo_definition, CapabilityCancellation, CapabilityDescriptor, CapabilityError,
-    CapabilityExecutor, CapabilityKind, CapabilityPermission, CapabilityPermissionScope,
-    CapabilityRequest, CapabilityRequestStatus, RiskLevel, ToolDescriptor,
+    CapabilityExecutor, CapabilityKind, CapabilityRequest, CapabilityRequestStatus, RiskLevel,
+    ToolDescriptor,
 };
 use wyvern::domain::{CapabilityId, MissionId, RuntimeId};
 use wyvern::events::{EventBus, RuntimeEvent};
@@ -45,17 +46,30 @@ async fn install_mock(kernel: &Kernel) -> (CapabilityId, wyvern::ToolId) {
     ids
 }
 
-fn permission(
+async fn grant(
+    kernel: &Kernel,
+    mission_id: MissionId,
+    runtime_id: RuntimeId,
     capability_id: CapabilityId,
     tool_id: wyvern::ToolId,
-    mission_id: MissionId,
-) -> CapabilityPermission {
-    CapabilityPermission {
-        capability_id,
-        allowed_tools: vec![tool_id],
-        scope: CapabilityPermissionScope::Mission(mission_id),
-        constraints: Default::default(),
-    }
+) -> wyvern::GrantId {
+    let runtime = kernel.get_runtime(runtime_id).await.unwrap();
+    kernel
+        .issue_authorization_grant(
+            runtime_id,
+            AuthorizationGrantDraft {
+                issuer: AuthorizationIssuer::Runtime(runtime_id),
+                subject_agent_id: runtime.agent_id,
+                capability_id,
+                allowed_tools: vec![tool_id],
+                scope: AuthorizationScope::Mission(mission_id),
+                maximum_risk: RiskLevel::Critical,
+                expires_at: None,
+            },
+        )
+        .await
+        .unwrap()
+        .id
 }
 
 fn request(
@@ -101,7 +115,6 @@ async fn registry_register_lookup_list_resolve_unregister_and_duplicate_work() {
 async fn mock_echo_succeeds_and_emits_routed_lifecycle_events() {
     let (kernel, mission_id, runtime_id, _dir) = runtime().await;
     let (capability_id, tool_id) = install_mock(&kernel).await;
-    let mut events = kernel.events().subscribe_envelopes();
     let request = request(
         mission_id,
         runtime_id,
@@ -110,18 +123,16 @@ async fn mock_echo_succeeds_and_emits_routed_lifecycle_events() {
         json!({"message":"hello"}),
     );
     let request_id = request.request_id;
+    grant(&kernel, mission_id, runtime_id, capability_id, tool_id).await;
+    let mut events = kernel.events().subscribe_envelopes();
     let result = kernel
-        .execute_capability(
-            request,
-            &permission(capability_id, tool_id, mission_id),
-            &CapabilityCancellation::new(),
-        )
+        .execute_capability(request, &CapabilityCancellation::new())
         .await
         .unwrap();
     assert_eq!(result.status, CapabilityRequestStatus::Succeeded);
     assert_eq!(result.output, Some(json!({"message":"hello"})));
     let envelopes: Vec<_> = std::iter::from_fn(|| events.try_recv().ok()).collect();
-    assert_eq!(envelopes.len(), 3);
+    assert_eq!(envelopes.len(), 4);
     assert_eq!(
         envelopes
             .iter()
@@ -129,6 +140,7 @@ async fn mock_echo_succeeds_and_emits_routed_lifecycle_events() {
             .collect::<Vec<_>>(),
         vec![
             "capability.requested",
+            "authorization.checked",
             "capability.started",
             "capability.succeeded"
         ]
@@ -147,6 +159,7 @@ async fn mock_echo_succeeds_and_emits_routed_lifecycle_events() {
     }));
     assert!(envelopes.iter().all(|event| match &event.payload {
         RuntimeEvent::CapabilityRequested { request_id: id, .. }
+        | RuntimeEvent::AuthorizationChecked { request_id: id, .. }
         | RuntimeEvent::CapabilityStarted { request_id: id, .. }
         | RuntimeEvent::CapabilitySucceeded { request_id: id, .. } => *id == request_id,
         _ => false,
@@ -167,12 +180,6 @@ async fn permission_denial_and_invalid_input_are_typed_and_audited() {
                 tool_id,
                 json!({"message":"x"}),
             ),
-            &CapabilityPermission {
-                capability_id,
-                allowed_tools: Vec::new(),
-                scope: CapabilityPermissionScope::Mission(mission_id),
-                constraints: Default::default(),
-            },
             &CapabilityCancellation::new(),
         )
         .await
@@ -182,6 +189,7 @@ async fn permission_denial_and_invalid_input_are_typed_and_audited() {
         denied.error,
         Some(CapabilityError::PermissionDenied(_))
     ));
+    grant(&kernel, mission_id, runtime_id, capability_id, tool_id).await;
     let failed = kernel
         .execute_capability(
             request(
@@ -191,7 +199,6 @@ async fn permission_denial_and_invalid_input_are_typed_and_audited() {
                 tool_id,
                 json!({"message":4}),
             ),
-            &permission(capability_id, tool_id, mission_id),
             &CapabilityCancellation::new(),
         )
         .await
@@ -246,15 +253,12 @@ async fn install_slow(kernel: &Kernel) -> (CapabilityId, wyvern::ToolId) {
 async fn timeout_and_cancellation_stop_waiting_and_have_distinct_states() {
     let (kernel, mission_id, runtime_id, _dir) = runtime().await;
     let (capability_id, tool_id) = install_slow(&kernel).await;
+    grant(&kernel, mission_id, runtime_id, capability_id, tool_id).await;
     let mut events = kernel.events().subscribe_envelopes();
     let mut timeout_request = request(mission_id, runtime_id, capability_id, tool_id, json!({}));
     timeout_request.timeout_ms = Some(5);
     let timeout = kernel
-        .execute_capability(
-            timeout_request,
-            &permission(capability_id, tool_id, mission_id),
-            &CapabilityCancellation::new(),
-        )
+        .execute_capability(timeout_request, &CapabilityCancellation::new())
         .await
         .unwrap();
     assert_eq!(timeout.status, CapabilityRequestStatus::TimedOut);
@@ -263,11 +267,10 @@ async fn timeout_and_cancellation_stop_waiting_and_have_distinct_states() {
     let cancel = CapabilityCancellation::new();
     let cancel_request = request(mission_id, runtime_id, capability_id, tool_id, json!({}));
     let kernel_copy = kernel.clone();
-    let permission_copy = permission(capability_id, tool_id, mission_id);
     let cancellation_copy = cancel.clone();
     let task = tokio::spawn(async move {
         kernel_copy
-            .execute_capability(cancel_request, &permission_copy, &cancellation_copy)
+            .execute_capability(cancel_request, &cancellation_copy)
             .await
             .unwrap()
     });
@@ -300,6 +303,7 @@ async fn timeout_and_cancellation_stop_waiting_and_have_distinct_states() {
 async fn result_enters_context_or_memory_only_after_explicit_selection() {
     let (kernel, mission_id, runtime_id, _dir) = runtime().await;
     let (capability_id, tool_id) = install_mock(&kernel).await;
+    grant(&kernel, mission_id, runtime_id, capability_id, tool_id).await;
     let request = request(
         mission_id,
         runtime_id,
@@ -308,11 +312,7 @@ async fn result_enters_context_or_memory_only_after_explicit_selection() {
         json!({"message":"remember"}),
     );
     let result = kernel
-        .execute_capability(
-            request.clone(),
-            &permission(capability_id, tool_id, mission_id),
-            &CapabilityCancellation::new(),
-        )
+        .execute_capability(request.clone(), &CapabilityCancellation::new())
         .await
         .unwrap();
     assert!(kernel
@@ -358,8 +358,7 @@ async fn result_enters_context_or_memory_only_after_explicit_selection() {
 async fn independent_requests_execute_concurrently_without_global_execution_lock() {
     let (kernel, mission_id, runtime_id, _dir) = runtime().await;
     let (capability_id, tool_id) = install_slow(&kernel).await;
-    let p1 = permission(capability_id, tool_id, mission_id);
-    let p2 = p1.clone();
+    grant(&kernel, mission_id, runtime_id, capability_id, tool_id).await;
     let k1 = kernel.clone();
     let k2 = kernel.clone();
     let c1 = CapabilityCancellation::new();
@@ -368,8 +367,8 @@ async fn independent_requests_execute_concurrently_without_global_execution_lock
     let r2 = request(mission_id, runtime_id, capability_id, tool_id, json!({}));
     let start = tokio::time::Instant::now();
     let (one, two) = tokio::join!(
-        k1.execute_capability(r1, &p1, &c1),
-        k2.execute_capability(r2, &p2, &c2),
+        k1.execute_capability(r1, &c1),
+        k2.execute_capability(r2, &c2),
     );
     assert_eq!(one.unwrap().status, CapabilityRequestStatus::Succeeded);
     assert_eq!(two.unwrap().status, CapabilityRequestStatus::Succeeded);

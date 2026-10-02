@@ -1,8 +1,9 @@
 //! Typed capability requests and the boundary used to dispatch them.
 
+use crate::authorization::AuthorizationDecision;
 use crate::context::RuntimeContext;
 use crate::domain::{
-    now_millis, CapabilityId, CapabilityRequestId, MissionId, RuntimeId, Timestamp, ToolId,
+    now_millis, CapabilityId, CapabilityRequestId, GrantId, MissionId, RuntimeId, Timestamp, ToolId,
 };
 use crate::events::{EventBus, RuntimeEvent};
 use crate::memory::{MemoryDraft, MemoryMetadataValue, MemoryProvenance, MemoryScope, MemoryType};
@@ -58,9 +59,25 @@ impl CapabilityDescriptor {
 #[serde(rename_all = "snake_case")]
 pub enum RiskLevel {
     Low,
+    Medium,
+    /// Legacy name retained for the risk level introduced before Stage 7A.
     Moderate,
     High,
     Critical,
+}
+
+impl RiskLevel {
+    pub(crate) fn is_at_most(self, maximum: Self) -> bool {
+        fn rank(value: RiskLevel) -> u8 {
+            match value {
+                RiskLevel::Low => 0,
+                RiskLevel::Medium | RiskLevel::Moderate => 1,
+                RiskLevel::High => 2,
+                RiskLevel::Critical => 3,
+            }
+        }
+        rank(self) <= rank(maximum)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -105,6 +122,10 @@ pub struct CapabilityRequest {
     pub parent_runtime_id: Option<RuntimeId>,
     pub capability_id: CapabilityId,
     pub tool_id: ToolId,
+    /// Optional grant selector. This is only a reference to a kernel-issued
+    /// grant; it does not itself authorize the request.
+    #[serde(default)]
+    pub authorization_grant_id: Option<GrantId>,
     pub input: Value,
     pub requested_at: Timestamp,
     pub timeout_ms: Option<u64>,
@@ -127,6 +148,7 @@ impl CapabilityRequest {
             parent_runtime_id: None,
             capability_id,
             tool_id,
+            authorization_grant_id: None,
             input,
             requested_at: now_millis(),
             timeout_ms: None,
@@ -231,33 +253,6 @@ impl CapabilityResult {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "scope", content = "id", rename_all = "snake_case")]
-pub enum CapabilityPermissionScope {
-    Mission(MissionId),
-    Runtime(RuntimeId),
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct CapabilityPermission {
-    pub capability_id: CapabilityId,
-    pub allowed_tools: Vec<ToolId>,
-    pub scope: CapabilityPermissionScope,
-    #[serde(default)]
-    pub constraints: BTreeMap<String, Value>,
-}
-
-impl CapabilityPermission {
-    pub fn allows(&self, request: &CapabilityRequest) -> bool {
-        self.capability_id == request.capability_id
-            && self.allowed_tools.contains(&request.tool_id)
-            && match self.scope {
-                CapabilityPermissionScope::Mission(id) => id == request.mission_id,
-                CapabilityPermissionScope::Runtime(id) => id == request.runtime_id,
-            }
-    }
-}
-
 #[derive(Clone)]
 pub struct CapabilityCancellation {
     sender: watch::Sender<bool>,
@@ -276,7 +271,9 @@ impl CapabilityCancellation {
     }
 
     pub fn cancel(&self) {
-        let _ = self.sender.send(true);
+        // Retain cancellation even when authorization or request setup has not
+        // subscribed yet; `send` would drop the value when there are no receivers.
+        self.sender.send_replace(true);
     }
 
     fn subscribe(&self) -> watch::Receiver<bool> {
@@ -430,10 +427,11 @@ impl CapabilityRegistry {
             .ok_or(CapabilityError::ToolNotFound(tool_id))
     }
 
-    pub async fn execute(
+    pub(crate) async fn execute_authorized(
         &self,
         mut request: CapabilityRequest,
-        permission: &CapabilityPermission,
+        authorization: AuthorizationDecision,
+        agent_id: crate::domain::AgentId,
         cancellation: &CapabilityCancellation,
     ) -> CapabilityResult {
         let requested_at = now_millis();
@@ -455,14 +453,65 @@ impl CapabilityRegistry {
             return self.event_failure(&request, error, None);
         }
 
-        if !permission.allows(&request) {
+        let decision_matches = authorization.matches_request(&request, agent_id);
+        let allowed = authorization.allowed() && decision_matches;
+        let denial_reason = if decision_matches {
+            authorization
+                .denial_reason()
+                .map(|reason| reason.to_string())
+        } else {
+            Some("authorization decision is not bound to this request".into())
+        };
+        let checked_at = now_millis();
+        if let Err(error) = self
+            .publish(
+                &request,
+                RuntimeEvent::AuthorizationChecked {
+                    mission_id: request.mission_id,
+                    runtime_id: request.runtime_id,
+                    parent_id: request.parent_runtime_id,
+                    authorization_id: authorization.id(),
+                    request_id: request.request_id,
+                    grant_id: authorization.grant_id(),
+                    agent_id: authorization.agent_id(),
+                    capability_id: request.capability_id,
+                    tool_id: request.tool_id,
+                    allowed,
+                    reason: denial_reason.clone(),
+                    timestamp: checked_at,
+                },
+            )
+            .await
+        {
+            return self.event_failure(&request, error, None);
+        }
+
+        if !allowed {
+            if let Err(error) = self
+                .publish(
+                    &request,
+                    RuntimeEvent::AuthorizationDenied {
+                        mission_id: request.mission_id,
+                        runtime_id: request.runtime_id,
+                        parent_id: request.parent_runtime_id,
+                        authorization_id: authorization.id(),
+                        request_id: request.request_id,
+                        grant_id: authorization.grant_id(),
+                        reason: denial_reason.clone().unwrap_or_else(|| "denied".into()),
+                        timestamp: checked_at,
+                    },
+                )
+                .await
+            {
+                return self.event_failure(&request, error, None);
+            }
             return self
                 .finish(
                     &request,
                     CapabilityRequestStatus::Rejected,
                     None,
                     Some(CapabilityError::PermissionDenied(
-                        "permission does not grant this capability, tool, and scope".into(),
+                        denial_reason.unwrap_or_else(|| "authorization denied".into()),
                     )),
                     None,
                 )
@@ -589,6 +638,39 @@ impl CapabilityRegistry {
                 .await
             }
         }
+    }
+
+    pub(crate) async fn reject(
+        &self,
+        request: CapabilityRequest,
+        error: CapabilityError,
+    ) -> CapabilityResult {
+        let requested_at = now_millis();
+        if let Err(event_error) = self
+            .publish(
+                &request,
+                RuntimeEvent::CapabilityRequested {
+                    mission_id: request.mission_id,
+                    runtime_id: request.runtime_id,
+                    parent_id: request.parent_runtime_id,
+                    request_id: request.request_id,
+                    capability_id: request.capability_id,
+                    tool_id: request.tool_id,
+                    timestamp: requested_at,
+                },
+            )
+            .await
+        {
+            return self.event_failure(&request, event_error, None);
+        }
+        self.finish(
+            &request,
+            CapabilityRequestStatus::Rejected,
+            None,
+            Some(error),
+            None,
+        )
+        .await
     }
 
     async fn finish(

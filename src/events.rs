@@ -1,7 +1,9 @@
+use crate::authorization::{AuthorizationIssuer, AuthorizationScope};
+use crate::capability::RiskLevel;
 use crate::decision::{DecisionEngineProvenance, DecisionError, DecisionOptionId, DecisionType};
 use crate::domain::{
-    AgentId, CapabilityId, CapabilityRequestId, DecisionRequestId, EventId, MemoryId, MissionId,
-    RuntimeId, RuntimeState, Timestamp, ToolId,
+    AgentId, AuthorizationId, CapabilityId, CapabilityRequestId, DecisionRequestId, EventId,
+    GrantId, MemoryId, MissionId, RuntimeId, RuntimeState, Timestamp, ToolId,
 };
 use crate::error::Result;
 use crate::result::RuntimeOutcome;
@@ -221,6 +223,52 @@ pub enum RuntimeEvent {
         error: String,
         timestamp: Timestamp,
     },
+    AuthorizationGranted {
+        mission_id: MissionId,
+        runtime_id: RuntimeId,
+        parent_id: Option<RuntimeId>,
+        grant_id: GrantId,
+        issuer: AuthorizationIssuer,
+        subject_agent_id: AgentId,
+        capability_id: CapabilityId,
+        allowed_tools: Vec<ToolId>,
+        scope: AuthorizationScope,
+        maximum_risk: RiskLevel,
+        issued_at: Timestamp,
+        expires_at: Option<Timestamp>,
+        timestamp: Timestamp,
+    },
+    AuthorizationRevoked {
+        mission_id: MissionId,
+        runtime_id: RuntimeId,
+        parent_id: Option<RuntimeId>,
+        grant_id: GrantId,
+        timestamp: Timestamp,
+    },
+    AuthorizationChecked {
+        mission_id: MissionId,
+        runtime_id: RuntimeId,
+        parent_id: Option<RuntimeId>,
+        authorization_id: AuthorizationId,
+        request_id: CapabilityRequestId,
+        grant_id: Option<GrantId>,
+        agent_id: AgentId,
+        capability_id: CapabilityId,
+        tool_id: ToolId,
+        allowed: bool,
+        reason: Option<String>,
+        timestamp: Timestamp,
+    },
+    AuthorizationDenied {
+        mission_id: MissionId,
+        runtime_id: RuntimeId,
+        parent_id: Option<RuntimeId>,
+        authorization_id: AuthorizationId,
+        request_id: CapabilityRequestId,
+        grant_id: Option<GrantId>,
+        reason: String,
+        timestamp: Timestamp,
+    },
     SchedulerStateChanged {
         mission_id: MissionId,
         runtime_id: RuntimeId,
@@ -260,6 +308,10 @@ impl RuntimeEvent {
             | Self::CapabilityFailed { timestamp, .. }
             | Self::CapabilityCancelled { timestamp, .. }
             | Self::CapabilityRejected { timestamp, .. } => *timestamp,
+            Self::AuthorizationGranted { timestamp, .. }
+            | Self::AuthorizationRevoked { timestamp, .. }
+            | Self::AuthorizationChecked { timestamp, .. }
+            | Self::AuthorizationDenied { timestamp, .. } => *timestamp,
             Self::SchedulerStateChanged { timestamp, .. } => *timestamp,
         }
     }
@@ -291,6 +343,10 @@ impl RuntimeEvent {
             | Self::CapabilityFailed { runtime_id, .. }
             | Self::CapabilityCancelled { runtime_id, .. }
             | Self::CapabilityRejected { runtime_id, .. } => *runtime_id,
+            Self::AuthorizationGranted { runtime_id, .. }
+            | Self::AuthorizationRevoked { runtime_id, .. }
+            | Self::AuthorizationChecked { runtime_id, .. }
+            | Self::AuthorizationDenied { runtime_id, .. } => *runtime_id,
             Self::SchedulerStateChanged { runtime_id, .. } => *runtime_id,
         }
     }
@@ -576,6 +632,47 @@ impl EventBus {
             } => {
                 tracing::warn!(mission_id = %mission_id, runtime_id = %runtime_id, request_id = %request_id, capability_id = %capability_id, tool_id = %tool_id, error = %error, "capability.rejected")
             }
+            RuntimeEvent::AuthorizationGranted {
+                mission_id,
+                runtime_id,
+                grant_id,
+                subject_agent_id,
+                capability_id,
+                ..
+            } => {
+                tracing::info!(mission_id = %mission_id, runtime_id = %runtime_id, grant_id = %grant_id, subject_agent_id = %subject_agent_id, capability_id = %capability_id, "authorization.granted")
+            }
+            RuntimeEvent::AuthorizationRevoked {
+                mission_id,
+                runtime_id,
+                grant_id,
+                ..
+            } => {
+                tracing::info!(mission_id = %mission_id, runtime_id = %runtime_id, grant_id = %grant_id, "authorization.revoked")
+            }
+            RuntimeEvent::AuthorizationChecked {
+                mission_id,
+                runtime_id,
+                authorization_id,
+                request_id,
+                grant_id,
+                allowed,
+                reason,
+                ..
+            } => {
+                tracing::info!(mission_id = %mission_id, runtime_id = %runtime_id, authorization_id = %authorization_id, request_id = %request_id, grant_id = ?grant_id, allowed = *allowed, reason = ?reason, "authorization.checked")
+            }
+            RuntimeEvent::AuthorizationDenied {
+                mission_id,
+                runtime_id,
+                authorization_id,
+                request_id,
+                grant_id,
+                reason,
+                ..
+            } => {
+                tracing::warn!(mission_id = %mission_id, runtime_id = %runtime_id, authorization_id = %authorization_id, request_id = %request_id, grant_id = ?grant_id, reason = %reason, "authorization.denied")
+            }
             RuntimeEvent::SchedulerStateChanged {
                 mission_id,
                 runtime_id,
@@ -676,6 +773,10 @@ impl RuntimeEvent {
             Self::CapabilityFailed { .. } => "capability.failed",
             Self::CapabilityCancelled { .. } => "capability.cancelled",
             Self::CapabilityRejected { .. } => "capability.rejected",
+            Self::AuthorizationGranted { .. } => "authorization.granted",
+            Self::AuthorizationRevoked { .. } => "authorization.revoked",
+            Self::AuthorizationChecked { .. } => "authorization.checked",
+            Self::AuthorizationDenied { .. } => "authorization.denied",
             Self::SchedulerStateChanged { state, detail, .. }
                 if *state == SchedulerState::Queued
                     && detail
@@ -731,6 +832,10 @@ impl RuntimeEvent {
             | Self::CapabilityFailed { mission_id, .. }
             | Self::CapabilityCancelled { mission_id, .. }
             | Self::CapabilityRejected { mission_id, .. } => *mission_id,
+            Self::AuthorizationGranted { mission_id, .. }
+            | Self::AuthorizationRevoked { mission_id, .. }
+            | Self::AuthorizationChecked { mission_id, .. }
+            | Self::AuthorizationDenied { mission_id, .. } => *mission_id,
             Self::SchedulerStateChanged { mission_id, .. } => *mission_id,
         }
     }
@@ -750,6 +855,10 @@ impl RuntimeEvent {
             | Self::CapabilityFailed { parent_id, .. }
             | Self::CapabilityCancelled { parent_id, .. }
             | Self::CapabilityRejected { parent_id, .. } => *parent_id,
+            Self::AuthorizationGranted { parent_id, .. }
+            | Self::AuthorizationRevoked { parent_id, .. }
+            | Self::AuthorizationChecked { parent_id, .. }
+            | Self::AuthorizationDenied { parent_id, .. } => *parent_id,
             Self::SchedulerStateChanged { parent_id, .. } => *parent_id,
             Self::ContextUpdated { parent_id, .. }
             | Self::DecisionRequested { parent_id, .. }

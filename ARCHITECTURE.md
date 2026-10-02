@@ -134,9 +134,15 @@ Later tools will add browser, tabs, IDE control, application control, screenshot
 
 The Stage 4 capability module separates a capability (an allowed interaction boundary) from its concrete tools (operations exposed by that boundary). Typed descriptors identify the capability and each tool, including version, provider, schemas, and risk level. `CapabilityRegistry` owns registered executors and supports listing, lookup, tool resolution, registration, and removal without a global singleton.
 
-A runtime submits a `CapabilityRequest` with mission/runtime identity, capability and tool IDs, input, timeout, and metadata. `Kernel::execute_capability` verifies that the runtime belongs to the stated mission before dispatch. A matching `CapabilityPermission` must grant the capability, tool, and mission or runtime scope. The executor receives the complete request identity; the registry enforces timeout/cancellation and emits request, start, and terminal lifecycle events through the existing EventBus/EventEnvelope.
+A runtime submits a `CapabilityRequest` with mission/runtime identity, capability and tool IDs, input, timeout, metadata, and optionally a kernel-issued grant ID as a selector. `Kernel::execute_capability` verifies that the runtime belongs to the stated mission, resolves the AgentId from the runtime, and obtains risk metadata from the registered tool. The kernel authorization manager loads a durable grant and checks subject, capability, tool, mission/runtime scope, maximum risk, expiration, and revocation before dispatch. Callers cannot supply a permission object or authorization decision to the executor. The registry enforces timeout/cancellation and emits request, authorization, and terminal lifecycle events through the existing EventBus/EventEnvelope.
 
 Results are returned as typed `CapabilityResult` values. They are not added to runtime context or memory automatically: callers explicitly select results for context compilation or convert a successful result to a `MemoryDraft`. The in-process `mock.echo` executor demonstrates this flow for tests. No browser, filesystem, process, network, model, or OS execution implementation is registered by default.
+
+### Stage 7A Kernel-Owned Authorization
+
+The authorization manager creates typed grant IDs and persists issuer identity, subject AgentId, capability, tool set, explicit Mission or Runtime scope, maximum `RiskLevel`, issue/expiration timestamps, and revocation timestamp in SQLite. Risk ordering is enforced during each check. Missing, unknown, mismatched, expired, over-risk, and revoked grants deny invocation. Grant checks are performed against the runtime identity and tool descriptor loaded by the kernel; an optional grant ID on the request only selects which persisted grant to evaluate.
+
+Grant issue, revoke, check, and denial events use the existing durable EventBus/event log. Grant mutation and its corresponding event append remain separate persistence operations; atomic state/event consistency is planned for Stage 7B. Issuer labels are recorded by the local management API but are not authenticated against human/operator credentials. This is a prototype authorization boundary, not a complete production identity or policy system.
 
 ### Stage 5 Scheduler
 

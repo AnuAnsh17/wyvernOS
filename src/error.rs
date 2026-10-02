@@ -1,6 +1,6 @@
 use crate::behavior::BehaviorError;
 use crate::decision::DecisionError;
-use crate::domain::{AgentId, MemoryId, MissionId, MissionState, RuntimeId, RuntimeState};
+use crate::domain::{AgentId, GrantId, MemoryId, MissionId, MissionState, RuntimeId, RuntimeState};
 use crate::scheduler::SchedulerState;
 use thiserror::Error;
 
@@ -48,6 +48,14 @@ pub enum WyvernError {
     },
     #[error("persisted event is invalid: {0}")]
     InvalidPersistedEvent(String),
+    #[error("authorization grant not found: {0}")]
+    AuthorizationGrantNotFound(GrantId),
+    #[error("duplicate authorization grant: {0}")]
+    DuplicateAuthorizationGrant(GrantId),
+    #[error("invalid authorization grant: {0}")]
+    InvalidAuthorizationGrant(String),
+    #[error("persisted authorization grant is invalid: {0}")]
+    InvalidPersistedAuthorization(String),
     #[error("memory not found: {0}")]
     MemoryNotFound(MemoryId),
     #[error("persistence error: {0}")]

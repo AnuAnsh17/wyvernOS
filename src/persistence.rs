@@ -1,5 +1,7 @@
 use crate::agent::AgentDefinition;
-use crate::domain::{AgentId, EventId, Mission, MissionId, MissionState, RuntimeId, RuntimeState};
+use crate::domain::{
+    AgentId, EventId, GrantId, Mission, MissionId, MissionState, RuntimeId, RuntimeState,
+};
 use crate::error::{Result, WyvernError};
 use crate::events::{EventEnvelope, RuntimeEvent};
 use crate::result::RuntimeResult;
@@ -41,6 +43,21 @@ pub struct PersistedEvent {
     pub payload_json: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, FromRow)]
+pub struct PersistedAuthorizationGrant {
+    pub grant_id: String,
+    pub issuer_json: String,
+    pub subject_agent_id: String,
+    pub capability_id: String,
+    pub allowed_tools_json: String,
+    pub scope_type: String,
+    pub scope_id: String,
+    pub maximum_risk_json: String,
+    pub issued_at: i64,
+    pub expires_at: Option<i64>,
+    pub revoked_at: Option<i64>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct StoredEvent {
     pub sequence_id: i64,
@@ -79,6 +96,13 @@ pub trait RuntimeStore: Send + Sync {
     async fn list_events(&self) -> Result<Vec<PersistedEvent>>;
     async fn events_for_runtime(&self, runtime_id: RuntimeId) -> Result<Vec<PersistedEvent>>;
     async fn events_for_mission(&self, mission_id: MissionId) -> Result<Vec<PersistedEvent>>;
+    async fn insert_authorization_grant(&self, grant: &PersistedAuthorizationGrant) -> Result<()>;
+    async fn get_authorization_grant(
+        &self,
+        grant_id: GrantId,
+    ) -> Result<Option<PersistedAuthorizationGrant>>;
+    async fn list_authorization_grants(&self) -> Result<Vec<PersistedAuthorizationGrant>>;
+    async fn revoke_authorization_grant(&self, grant_id: GrantId, revoked_at: i64) -> Result<bool>;
     async fn update_runtime_state(
         &self,
         _runtime_id: RuntimeId,
@@ -198,6 +222,37 @@ impl SqliteRuntimeStore {
         .await?;
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_event_log_mission_sequence ON event_log(mission_id, sequence_id)",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS authorization_grants (
+                grant_id TEXT PRIMARY KEY,
+                issuer_json TEXT NOT NULL,
+                subject_agent_id TEXT NOT NULL,
+                capability_id TEXT NOT NULL,
+                allowed_tools_json TEXT NOT NULL,
+                scope_type TEXT NOT NULL,
+                scope_id TEXT NOT NULL,
+                maximum_risk_json TEXT NOT NULL,
+                issued_at INTEGER NOT NULL,
+                expires_at INTEGER NULL,
+                revoked_at INTEGER NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            r#"
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_active_authorization_grant_identity
+            ON authorization_grants (
+                subject_agent_id, capability_id, allowed_tools_json,
+                scope_type, scope_id, maximum_risk_json, IFNULL(expires_at, -1)
+            ) WHERE revoked_at IS NULL
+            "#,
         )
         .execute(&self.pool)
         .await?;
@@ -418,6 +473,77 @@ impl RuntimeStore for SqliteRuntimeStore {
         .bind(mission_id.to_string())
         .fetch_all(&self.pool)
         .await?)
+    }
+
+    async fn insert_authorization_grant(&self, grant: &PersistedAuthorizationGrant) -> Result<()> {
+        let result = sqlx::query(
+            r#"
+            INSERT INTO authorization_grants (
+                grant_id, issuer_json, subject_agent_id, capability_id, allowed_tools_json,
+                scope_type, scope_id, maximum_risk_json, issued_at, expires_at, revoked_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+            "#,
+        )
+        .bind(&grant.grant_id)
+        .bind(&grant.issuer_json)
+        .bind(&grant.subject_agent_id)
+        .bind(&grant.capability_id)
+        .bind(&grant.allowed_tools_json)
+        .bind(&grant.scope_type)
+        .bind(&grant.scope_id)
+        .bind(&grant.maximum_risk_json)
+        .bind(grant.issued_at)
+        .bind(grant.expires_at)
+        .bind(grant.revoked_at)
+        .execute(&self.pool)
+        .await;
+        match result {
+            Ok(_) => Ok(()),
+            Err(sqlx::Error::Database(error)) if error.is_unique_violation() => {
+                let id = GrantId::from_str(&grant.grant_id).map_err(|_| {
+                    WyvernError::InvalidAuthorizationGrant("invalid generated grant ID".into())
+                })?;
+                Err(WyvernError::DuplicateAuthorizationGrant(id))
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    async fn get_authorization_grant(
+        &self,
+        grant_id: GrantId,
+    ) -> Result<Option<PersistedAuthorizationGrant>> {
+        Ok(sqlx::query_as::<_, PersistedAuthorizationGrant>(
+            r#"SELECT grant_id, issuer_json, subject_agent_id, capability_id,
+                      allowed_tools_json, scope_type, scope_id, maximum_risk_json,
+                      issued_at, expires_at, revoked_at
+               FROM authorization_grants WHERE grant_id = ?1"#,
+        )
+        .bind(grant_id.to_string())
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
+    async fn list_authorization_grants(&self) -> Result<Vec<PersistedAuthorizationGrant>> {
+        Ok(sqlx::query_as::<_, PersistedAuthorizationGrant>(
+            r#"SELECT grant_id, issuer_json, subject_agent_id, capability_id,
+                      allowed_tools_json, scope_type, scope_id, maximum_risk_json,
+                      issued_at, expires_at, revoked_at
+               FROM authorization_grants ORDER BY grant_id ASC"#,
+        )
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    async fn revoke_authorization_grant(&self, grant_id: GrantId, revoked_at: i64) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE authorization_grants SET revoked_at = ?2 WHERE grant_id = ?1 AND revoked_at IS NULL",
+        )
+        .bind(grant_id.to_string())
+        .bind(revoked_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
     }
 
     async fn update_runtime_state(

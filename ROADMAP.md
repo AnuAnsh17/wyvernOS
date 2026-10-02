@@ -109,109 +109,92 @@ Goals:
 - durable scheduler state and interrupted-runtime recovery
 - scheduler snapshots and CLI inspection
 
-## Stage 6 - Model Router
+## Stage 6A-D - Decision, Behavior, and Durable Identity
+
+Status: Implemented
+
+Goals completed:
+
+- model-agnostic `DecisionEngine` request/result contract and deterministic mock
+- bounded, kernel-applied runtime lifecycle decisions with freshness checks
+- `RuntimeBehavior` registry and common direct/scheduled execution path
+- durable Agent definitions and SQLite event history
+
+## Stage 7 - Kernel Hardening
+
+### Stage 7A - Kernel-Owned Authorization
+
+Status: Implemented
+
+Goals completed:
+
+- typed durable grants bound to AgentId, capability, tools, mission/runtime scope, and maximum risk
+- issue time, optional expiration, and revocation state in SQLite
+- kernel authorization checks before capability dispatch
+- durable grant, revoke, checked, and denied events
+- tests for allow/deny, invalid/duplicate/unknown grants, identity and scope mismatch, risk, expiry, revocation, and restart recovery
+
+Known boundary: issuer labels are recorded by the trusted local management API but are not authenticated human/operator identities. Grant mutations and event appends are not yet atomic.
+
+### Stage 7B - Atomic State and Event Consistency
 
 Status: Planned
 
 Goals:
 
-- provider abstraction
-- external reasoning API support
-- policy-driven model selection
+- transact critical kernel state changes with corresponding durable event appends
+- preserve existing compare-and-set runtime version checks
+- test rollback and recovery under injected persistence failures
 
-## Stage 7 - Laya Integration
-
-Status: Planned
-
-Goals:
-
-- fast decision provider
-- deterministic decision logic
-- separation from reasoning
-
-## Stage 8 - TUI
+### Stage 7C - Scheduler Hardening
 
 Status: Planned
 
 Goals:
 
-- mission view
-- runtime tree
-- agent view
-- event stream
-- system monitoring
-- model activity
-- command input
+- address waiting-parent recovery and dependency dead ends
+- harden timeout, cancellation, retry, and completion races
+- preserve fairness and prevent duplicate claims
+- remove unnecessary busy polling where present
+- repeat full-suite runs and resolve the known intermittent Stage 1 concurrency-test stall
 
-## Stage 9 - Browser / Application Control
+### Stage 7D - First Real Read-Only Capability
 
 Status: Planned
 
 Goals:
 
-- browser
-- tabs
-- filesystem extensions
-- IDE control
-- application control
+- implement a scoped `filesystem.read` capability
+- enforce path boundaries, traversal protection, file-size limits, authorization, and timeout
+- return structured results and emit durable events
+- test denied paths, traversal, oversized and missing files, concurrency, and restart behavior
 
-## Stage 10 - Skills
-
-Status: Planned
-
-Goals:
-
-- skill registry
-- skill loading system
-
-## Stage 11 - Advanced Agents
+## Stage 8 - Skill Integration Layer
 
 Status: Planned
 
-Goals:
+Sub-stages:
 
-- research
-- coding
-- browser automation
-- security
-- academic work
-- reporting
-- validation
+- **8A:** typed Skill identity, metadata, capability declarations, and adapter contract
+- **8B:** metadata registry, lookup/resolution, persistence, and process-local adapter binding
+- **8C:** bridge adapters through the existing capability and authorization path; use an offline mock skill
+- **8D:** runtime skill orchestration demo with decisions, authorization, result propagation, and restart coverage
 
-## Stage 12 - Reliability
+Skills are integrations that expose capabilities; they are not runtimes, agents, models, or kernel authorities. Executable adapter objects remain process-local.
 
-Status: Planned
-
-Goals:
-
-- retries
-- crash recovery
-- runtime restoration
-- cancellation
-- timeouts
-- dependency handling
-- checkpointing
-- graceful shutdown
-- mission resumption
-
-## Stage 13 - Deep OS Integration
+## Stage 9 - Specialized Decision Intelligence
 
 Status: Planned
 
-Goals:
+Sub-stages:
 
-- Linux system integration
-- process management
-- sandboxing
-- permissions
-- resource control
-- isolation
-- system services
+- **9A:** formalize the decision ontology and build a validated scenario dataset while protecting the held-out Wyvern benchmark
+- **9B:** add a replaceable teacher interface and structured distillation/quality filtering
+- **9C:** fine-tune and evaluate a specialized Laya implementation of `DecisionEngine`
+- **9D:** add conservative hybrid local/cloud decision routing with escalation and human-approval boundaries
 
-## Stage 14 - Wyvern Linux Environment
+Kaggle is the preferred GPU training environment for Stage 9 experiments. Keep authentication secrets and large model artifacts outside Git, record the actual execution environment and reproducible configurations, and compare the trained model against the protected held-out benchmark before calling the experiment successful.
 
-Status: Planned
+## Later Work
 
-Goals:
-
-- investigate a minimal Linux environment or distribution where Wyvern becomes the primary AI orchestration layer
+Planned areas after the prototype sequence include a TUI, broader browser/application integration, additional reusable agents and skills, stronger recovery/checkpointing, deep Linux integration, and exploration of a Wyvern-oriented Linux environment. These items are not implemented by Stages 6A-D or 7A.

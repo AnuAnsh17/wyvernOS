@@ -1,11 +1,15 @@
 use crate::agent::{AgentDefinition, AgentKind};
+use crate::authorization::{
+    AuthorizationGrant, AuthorizationGrantDraft, AuthorizationIssuer, AuthorizationManager,
+    AuthorizationScope,
+};
 use crate::behavior::demo::RuntimeHooks;
 use crate::behavior::{
     BehaviorError, BehaviorRuntimeHandle, ChildRuntimeRunner, RuntimeBehavior,
     RuntimeBehaviorRegistry, RuntimeExecutionContext,
 };
 use crate::capability::{
-    CapabilityCancellation, CapabilityPermission, CapabilityRegistry, CapabilityRequest,
+    CapabilityCancellation, CapabilityError, CapabilityRegistry, CapabilityRequest,
     CapabilityResult,
 };
 use crate::context::{
@@ -223,6 +227,7 @@ struct KernelInner {
     pub runtimes: RuntimeRegistry,
     pub events: EventBus,
     pub capabilities: CapabilityRegistry,
+    pub authorization: AuthorizationManager,
     pub store: Arc<dyn RuntimeStore>,
     pub context_store: ContextStore,
     pub memory_store: MemoryStore,
@@ -277,6 +282,7 @@ impl Kernel {
         behavior_registry: RuntimeBehaviorRegistry,
     ) -> Result<Self> {
         let capabilities = CapabilityRegistry::new(events.clone());
+        let authorization = AuthorizationManager::new(store.clone());
         let kernel = Self {
             inner: Arc::new(KernelInner {
                 agents: AgentRegistry::default(),
@@ -284,6 +290,7 @@ impl Kernel {
                 runtimes: RuntimeRegistry::default(),
                 events,
                 capabilities,
+                authorization,
                 store,
                 context_store,
                 memory_store,
@@ -756,7 +763,6 @@ impl Kernel {
     pub async fn execute_capability(
         &self,
         mut request: CapabilityRequest,
-        permission: &CapabilityPermission,
         cancellation: &CapabilityCancellation,
     ) -> Result<CapabilityResult> {
         let runtime = self.get_runtime(request.runtime_id).await?;
@@ -766,11 +772,153 @@ impl Kernel {
             ));
         }
         request.parent_runtime_id = runtime.parent_id;
+        let (capability, tool) = match self.inner.capabilities.resolve_tool(request.tool_id).await {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                return Ok(self.inner.capabilities.reject(request, error).await);
+            }
+        };
+        if capability.id != request.capability_id {
+            let capability_id = request.capability_id;
+            return Ok(self
+                .inner
+                .capabilities
+                .reject(request, CapabilityError::CapabilityNotFound(capability_id))
+                .await);
+        }
+        let decision = self
+            .inner
+            .authorization
+            .authorize(&request, runtime.agent_id, tool.risk_level)
+            .await?;
         Ok(self
             .inner
             .capabilities
-            .execute(request, permission, cancellation)
+            .execute_authorized(request, decision, runtime.agent_id, cancellation)
             .await)
+    }
+
+    /// Issues a durable grant through the kernel. The runtime ID provides the
+    /// mission context used for validation and event routing.
+    pub async fn issue_authorization_grant(
+        &self,
+        issuer_runtime_id: RuntimeId,
+        draft: AuthorizationGrantDraft,
+    ) -> Result<AuthorizationGrant> {
+        let issuer_runtime = self.get_runtime(issuer_runtime_id).await?;
+        if let AuthorizationIssuer::Runtime(issuer_id) = &draft.issuer {
+            if *issuer_id != issuer_runtime_id {
+                return Err(WyvernError::InvalidAuthorizationGrant(
+                    "runtime issuer must match the issuing runtime".into(),
+                ));
+            }
+        }
+        self.agent(draft.subject_agent_id).await?;
+        let target_mission_id = match &draft.scope {
+            AuthorizationScope::Mission(mission_id) => {
+                self.get_mission(*mission_id).await?;
+                *mission_id
+            }
+            AuthorizationScope::Runtime(runtime_id) => {
+                let target = self.get_runtime(*runtime_id).await?;
+                if target.agent_id != draft.subject_agent_id {
+                    return Err(WyvernError::InvalidAuthorizationGrant(
+                        "runtime scope must identify a runtime of the grant subject agent".into(),
+                    ));
+                }
+                target.mission_id
+            }
+        };
+        if target_mission_id != issuer_runtime.mission_id {
+            return Err(WyvernError::InvalidAuthorizationGrant(
+                "issuer runtime and grant scope must belong to the same mission".into(),
+            ));
+        }
+        for tool_id in &draft.allowed_tools {
+            let (capability, _) = self
+                .inner
+                .capabilities
+                .resolve_tool(*tool_id)
+                .await
+                .map_err(|error| WyvernError::InvalidAuthorizationGrant(error.to_string()))?;
+            if capability.id != draft.capability_id {
+                return Err(WyvernError::InvalidAuthorizationGrant(format!(
+                    "tool {tool_id} does not belong to capability {}",
+                    draft.capability_id
+                )));
+            }
+        }
+        let grant = self.inner.authorization.issue(draft).await?;
+        self.inner
+            .events
+            .publish(RuntimeEvent::AuthorizationGranted {
+                mission_id: issuer_runtime.mission_id,
+                runtime_id: issuer_runtime.id,
+                parent_id: issuer_runtime.parent_id,
+                grant_id: grant.id,
+                issuer: grant.issuer.clone(),
+                subject_agent_id: grant.subject_agent_id,
+                capability_id: grant.capability_id,
+                allowed_tools: grant.allowed_tools.clone(),
+                scope: grant.scope.clone(),
+                maximum_risk: grant.maximum_risk,
+                issued_at: grant.issued_at,
+                expires_at: grant.expires_at,
+                timestamp: now_millis(),
+            })
+            .await?;
+        Ok(grant)
+    }
+
+    pub async fn revoke_authorization_grant(
+        &self,
+        issuer_runtime_id: RuntimeId,
+        grant_id: crate::domain::GrantId,
+    ) -> Result<AuthorizationGrant> {
+        let issuer_runtime = self.get_runtime(issuer_runtime_id).await?;
+        let grant = self
+            .inner
+            .authorization
+            .get(grant_id)
+            .await?
+            .ok_or(WyvernError::AuthorizationGrantNotFound(grant_id))?;
+        let target_mission_id = match grant.scope {
+            AuthorizationScope::Mission(mission_id) => mission_id,
+            AuthorizationScope::Runtime(runtime_id) => {
+                self.get_runtime(runtime_id).await?.mission_id
+            }
+        };
+        if target_mission_id != issuer_runtime.mission_id {
+            return Err(WyvernError::InvalidAuthorizationGrant(
+                "revoking runtime must belong to the grant mission".into(),
+            ));
+        }
+        let was_revoked = grant.revoked_at.is_some();
+        let revoked = self.inner.authorization.revoke(grant_id).await?;
+        if !was_revoked {
+            self.inner
+                .events
+                .publish(RuntimeEvent::AuthorizationRevoked {
+                    mission_id: issuer_runtime.mission_id,
+                    runtime_id: issuer_runtime.id,
+                    parent_id: issuer_runtime.parent_id,
+                    grant_id,
+                    timestamp: revoked.revoked_at.unwrap_or_else(now_millis),
+                })
+                .await?;
+        }
+        Ok(revoked)
+    }
+
+    pub async fn authorization_grant(
+        &self,
+        grant_id: crate::domain::GrantId,
+    ) -> Result<AuthorizationGrant> {
+        self.inner
+            .authorization
+            .get(grant_id)
+            .await?
+            .ok_or(WyvernError::AuthorizationGrantNotFound(grant_id))
     }
 
     pub async fn create_memory(&self, draft: MemoryDraft) -> Result<MemoryItem> {
