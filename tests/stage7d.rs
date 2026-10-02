@@ -138,3 +138,88 @@ async fn filesystem_read_requires_a_kernel_grant() {
     let result = read(&rig, "hello.txt", None).await;
     assert_eq!(result.status, CapabilityRequestStatus::Rejected);
 }
+
+#[tokio::test]
+async fn authorized_filesystem_reads_are_independent_and_concurrent() {
+    let rig = rig(1024).await;
+    let grant_id = grant(&rig).await;
+    let (first, second, third) = tokio::join!(
+        read(&rig, "hello.txt", Some(grant_id)),
+        read(&rig, "data.bin", Some(grant_id)),
+        read(&rig, "hello.txt", Some(grant_id)),
+    );
+    assert_eq!(first.status, CapabilityRequestStatus::Succeeded);
+    assert_eq!(second.status, CapabilityRequestStatus::Succeeded);
+    assert_eq!(third.status, CapabilityRequestStatus::Succeeded);
+}
+
+#[tokio::test]
+async fn filesystem_read_can_be_registered_again_after_kernel_restart() {
+    let rig = rig(1024).await;
+    let grant_id = grant(&rig).await;
+    let database = rig._directory.path().join("stage7d.sqlite");
+    let workspace = rig.workspace.path().to_path_buf();
+    let mission_id = rig.mission_id;
+    let runtime_id = rig.runtime_id;
+    let agent_id = rig.agent_id;
+    let capability_id = rig.capability_id;
+    let tool_id = rig.tool_id;
+    drop(rig.kernel);
+
+    let reopened = Kernel::new_sqlite(&database).await.unwrap();
+    let (capability, tool, executor) = filesystem_read_definition(workspace, 1024);
+    reopened
+        .capabilities()
+        .register(
+            wyvern::CapabilityDescriptor {
+                id: capability_id,
+                ..capability
+            },
+            vec![wyvern::ToolDescriptor {
+                id: tool_id,
+                capability_id,
+                ..tool
+            }],
+            executor,
+        )
+        .await
+        .unwrap();
+    let mut request = CapabilityRequest::new(
+        runtime_id,
+        mission_id,
+        capability_id,
+        tool_id,
+        json!({"path": "hello.txt"}),
+    );
+    request.authorization_grant_id = Some(grant_id);
+    let result = reopened
+        .execute_capability(request, &CapabilityCancellation::new())
+        .await
+        .unwrap();
+    assert_eq!(result.status, CapabilityRequestStatus::Succeeded);
+    assert_eq!(reopened.agent(agent_id).await.unwrap().id, agent_id);
+}
+
+#[cfg(unix)]
+fn create_file_symlink(source: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(source, link)
+}
+
+#[cfg(windows)]
+fn create_file_symlink(source: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_file(source, link)
+}
+
+#[tokio::test]
+async fn filesystem_read_rejects_symlink_escape() {
+    let rig = rig(1024).await;
+    let outside = tempfile::tempdir().unwrap();
+    let outside_file = outside.path().join("secret.txt");
+    std::fs::write(&outside_file, "outside workspace").unwrap();
+    let link = rig.workspace.path().join("outside.txt");
+    if create_file_symlink(&outside_file, &link).is_err() {
+        return;
+    }
+    let result = read(&rig, "outside.txt", Some(grant(&rig).await)).await;
+    assert_eq!(result.status, CapabilityRequestStatus::Failed);
+}

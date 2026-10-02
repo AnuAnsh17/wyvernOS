@@ -162,14 +162,14 @@ Goals:
 
 ### Stage 7D - First Real Read-Only Capability
 
-Status: In progress
+Status: Implemented
 
-Goals:
+Goals completed:
 
 - implement a scoped, workspace-configured `filesystem.read` capability
 - enforce canonical path boundaries, traversal protection, regular-file checks, file-size limits, authorization, and timeout
 - return structured UTF-8 or binary results and emit durable events
-- extend tests to cover concurrency, restart registration, and symlink-specific behavior
+- tests cover denied paths, traversal, oversized and missing files, concurrency, restart registration, and symlink-specific behavior
 
 ## Stage 8 - Skill Integration Layer
 
